@@ -9,6 +9,7 @@ class Bundle:
         self.sections = []
         self.manifest = []   # human-readable record of what went in
         self.used = 0
+        self.attached_files = 0
 
     def add(self, title, body, note=None):
         if not body:
@@ -19,6 +20,8 @@ class Bundle:
             return False
         self.sections.append(block)
         self.used += len(block)
+        if title.startswith("FILE "):
+            self.attached_files += 1
         self.manifest.append(note or title)
         return True
 
@@ -82,8 +85,51 @@ def build(item, repo_root, diff=None):
         b.add("SYMBOL SEARCH", "\n\n".join(grep_blocks),
               note=f"grepped {len(grep_blocks)} symbol(s)")
 
+    # Prose-only reports attach nothing above. Send the source instead: for a
+    # small repo that is affordable, and it is the difference between the model
+    # guessing and the model reading.
+    if b.attached_files < config.FALLBACK_WHEN_FEWER_THAN:
+        added = _attach_by_relevance(b, repo_root, searchable, seen)
+        if added:
+            b.manifest.append(f"thin context -> attached {added} source file(s)")
+
     entries, truncated = context.repo_tree(repo_root)
     tree = "\n".join(entries) + ("\n[... truncated ...]" if truncated else "")
     b.add("REPOSITORY FILES", tree, note=f"{len(entries)} paths")
 
     return b
+
+
+def _attach_by_relevance(b, repo_root, text, seen):
+    """Add source files, most plausibly relevant first, until the budget runs out.
+
+    Ranking is deliberately crude: a file whose name is mentioned in the report
+    wins, then smaller files, because several small files usually inform an
+    analysis better than one large one.
+    """
+    lowered = text.lower()
+    candidates = []
+    for root, dirs, files in os.walk(repo_root):
+        dirs[:] = [d for d in dirs if d not in config.SKIP_DIRS]
+        for name in files:
+            if not name.endswith(config.SOURCE_SUFFIXES):
+                continue
+            full = os.path.join(root, name)
+            if any(full == r for r, _ in seen):
+                continue
+            try:
+                size = os.path.getsize(full)
+            except OSError:
+                continue
+            stem = os.path.splitext(name)[0].lower()
+            mentioned = 0 if (stem in lowered and len(stem) > 3) else 1
+            candidates.append((mentioned, size, full))
+
+    candidates.sort()
+    added = 0
+    for _, _, full in candidates[: config.FALLBACK_MAX_FILES]:
+        rel = os.path.relpath(full, repo_root)
+        if not b.add(f"FILE {rel}", context.read_excerpt(full), note=f"source: {rel}"):
+            break
+        added += 1
+    return added

@@ -45,14 +45,18 @@ def _say(msg, quiet=False):
 
 # --- the one analysis path, shared by `analyze` and `loop` -------------------
 
-def analyze_item(number, repo_root, repo=None, *, model=None, num_ctx=None,
-                 think=None, task=None, godot=False, dry_run=False, post=False,
-                 quiet=False):
+def analyze_item(number, repo_root, repo=None, *, kind=None, model=None,
+                 num_ctx=None, think=None, task=None, godot=False,
+                 dry_run=False, post=False, quiet=False):
     """Fetch, assemble, call, optionally post.
+
+    `kind` is "issue" or "pr" when the caller already knows — the loop always
+    does, because it came from `issue list` or `pr list`. Only fall back to
+    probing when a human passed a bare number.
 
     Returns a dict with the outcome, or None if nothing was produced.
     """
-    pull_request = gh.is_pr(number, repo, repo_root)
+    pull_request = (kind == "pr") if kind else gh.is_pr(number, repo, repo_root)
     if pull_request:
         item = gh.fetch_pr(number, repo, repo_root)
         diff = gh.fetch_pr_diff(number, repo, repo_root)
@@ -194,7 +198,7 @@ def cycle(args, repo_root, me):
         number, kind = it["number"], it["kind"]
         try:
             result = analyze_item(
-                number, repo_root, args.repo, model=args.model,
+                number, repo_root, args.repo, kind=kind, model=args.model,
                 num_ctx=args.num_ctx, think=args.think, task=args.task,
                 godot=args.godot, dry_run=args.dry_run, post=args.post,
             )

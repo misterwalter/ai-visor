@@ -88,8 +88,24 @@ def fetch_pr_diff(number, repo=None, cwd=None):
 
 
 def is_pr(number, repo=None, cwd=None):
+    """Is this number a pull request?
+
+    Not answerable with `gh pr view N --json number`: gh 2.4 returns exit 0 and
+    `{"number": N}` for plain issues, only failing once real PR fields are
+    requested. The REST payload is unambiguous — only pull requests carry a
+    `pull_request` key — so ask for that instead.
+    """
+    path = f"repos/{repo}/issues/{number}" if repo else \
+           f"repos/{{owner}}/{{repo}}/issues/{number}"
     try:
-        _gh(["pr", "view", str(number), "--json", "number"], repo, cwd)
+        out = _gh(["api", path, "--jq", ".pull_request != null"], cwd=cwd).strip()
+        if out in ("true", "false"):
+            return out == "true"
+    except GhError:
+        pass
+    # Fallback: ask for a field only a PR has, so old gh cannot fake it.
+    try:
+        _gh(["pr", "view", str(number), "--json", "headRefName"], repo, cwd)
         return True
     except GhError:
         return False

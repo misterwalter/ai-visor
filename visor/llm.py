@@ -11,6 +11,17 @@ class LlmError(RuntimeError):
     pass
 
 
+def _post(payload, timeout):
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        config.OLLAMA_URL + "/api/chat",
+        data=data,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def chat(messages, model=None, num_ctx=None, timeout=None, think=None):
     """Send one chat completion. Returns (text, stats)."""
     payload = {
@@ -24,19 +35,23 @@ def chat(messages, model=None, num_ctx=None, timeout=None, think=None):
     if level and level != "off":
         payload["think"] = level
 
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        config.OLLAMA_URL + "/api/chat",
-        data=data,
-        headers={"Content-Type": "application/json"},
-    )
+    timeout = timeout or config.TIMEOUT_SECONDS
     started = time.time()
     try:
-        with urllib.request.urlopen(req, timeout=timeout or config.TIMEOUT_SECONDS) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+        result = _post(payload, timeout)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:500]
-        raise LlmError(f"HTTP {exc.code} from Ollama: {detail}") from exc
+        # Plenty of models have no reasoning mode. Asking for one is a
+        # preference, not a requirement — drop it and carry on.
+        if "does not support thinking" in detail and "think" in payload:
+            payload.pop("think")
+            try:
+                result = _post(payload, timeout)
+            except urllib.error.HTTPError as exc2:
+                detail2 = exc2.read().decode("utf-8", "replace")[:500]
+                raise LlmError(f"HTTP {exc2.code} from Ollama: {detail2}") from exc2
+        else:
+            raise LlmError(f"HTTP {exc.code} from Ollama: {detail}") from exc
     except (urllib.error.URLError, OSError) as exc:
         raise LlmError(f"cannot reach Ollama at {config.OLLAMA_URL}: {exc}") from exc
 
@@ -47,6 +62,7 @@ def chat(messages, model=None, num_ctx=None, timeout=None, think=None):
         "prompt_tokens": result.get("prompt_eval_count"),
         "output_tokens": result.get("eval_count"),
         "model": result.get("model"),
+        "thinking": payload.get("think", "off"),
     }
     if not text.strip():
         raise LlmError(f"model returned nothing (stats: {stats})")

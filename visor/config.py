@@ -23,6 +23,12 @@ MAX_CONTEXT_CHARS = int(os.environ.get("VISOR_MAX_CONTEXT_CHARS", "120000"))
 MAX_FILE_CHARS = int(os.environ.get("VISOR_MAX_FILE_CHARS", "20000"))
 TRACE_CONTEXT_LINES = 40  # lines either side of a stack-trace hit
 
+# Prose bug reports name no files and carry no traceback, so the extractors
+# find nothing to attach. Rather than hand the model a complaint and a file
+# listing, fall back to sending the source itself when there is room.
+FALLBACK_WHEN_FEWER_THAN = int(os.environ.get("VISOR_FALLBACK_MIN_FILES", "2"))
+FALLBACK_MAX_FILES = int(os.environ.get("VISOR_FALLBACK_MAX_FILES", "15"))
+
 # Files worth reading as source when they turn up in an issue.
 SOURCE_SUFFIXES = (
     ".gd", ".py", ".cs", ".cpp", ".h", ".hpp", ".c", ".js", ".ts",
