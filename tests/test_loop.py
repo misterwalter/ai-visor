@@ -102,5 +102,37 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(len(self.run_cycle()), 1)
 
 
+
+class FieldFallbackTests(unittest.TestCase):
+    """Older gh builds reject fields newer ones accept; we should cope."""
+
+    def test_drops_unsupported_field_and_retries(self):
+        calls = []
+
+        def fake_gh(argv, repo=None, cwd=None):
+            fields = argv[argv.index("--json") + 1].split(",")
+            calls.append(fields)
+            if "headRefOid" in fields:
+                raise gh.GhError('gh pr list failed: Unknown JSON field: "headRefOid"\n'
+                                 'Available fields:\n  number\n  updatedAt')
+            return '[{"number": 3, "title": "t", "updatedAt": "x"}]'
+
+        with mock.patch.object(gh, "_gh", side_effect=fake_gh):
+            rows = list(gh.list_open_prs(None, REPO, ROOT))
+
+        self.assertEqual(len(calls), 2, "should retry once without the bad field")
+        self.assertIn("headRefOid", calls[0])
+        self.assertNotIn("headRefOid", calls[1])
+        self.assertEqual(rows[0]["number"], 3)
+        self.assertEqual(rows[0]["kind"], "pr")
+
+    def test_unrelated_error_is_not_swallowed(self):
+        def fake_gh(argv, repo=None, cwd=None):
+            raise gh.GhError("could not resolve to a Repository")
+
+        with mock.patch.object(gh, "_gh", side_effect=fake_gh):
+            with self.assertRaises(gh.GhError):
+                list(gh.list_open_prs(None, REPO, ROOT))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
