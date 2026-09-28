@@ -12,7 +12,9 @@ echo "harness settings installed"
 for build in abliterated official; do
   base="$(awk '/^FROM /{print $2}' "$HERE/Modelfile.$build")"
   if ollama show "$base" > /dev/null 2>&1; then
-    ollama create "coder-$build" -f "$HERE/Modelfile.$build" > /dev/null
+    # Ollama reports progress on stderr; keep it only if the step fails.
+    log="$(ollama create "coder-$build" -f "$HERE/Modelfile.$build" 2>&1)" \
+      || { echo "$log"; echo "model coder-$build FAILED to register"; exit 1; }
     echo "model coder-$build registered"
   else
     echo "model coder-$build skipped: weights for $base are not on disk"
