@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Gate: task files are the owner's and live in their notes, not in this repo
+gate/tasks/

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Run the flatpak Godot headless against a project directory.
+# Usage: godot-headless <project_dir> [godot args...]
+set -u
+proj="$(realpath "${1:?project dir required}")"; shift
+exec flatpak run --user --filesystem="$proj" org.godotengine.Godot --headless --path "$proj" "$@"

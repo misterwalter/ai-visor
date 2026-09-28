@@ -1,0 +1,72 @@
+{
+  "env": {
+    "OLLAMA_API_KEY": "ollama"
+  },
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "model": {
+    "name": "coder-abliterated"
+  },
+  "modelProviders": {
+    "openai": [
+      {
+        "id": "coder-abliterated",
+        "name": "Qwen3-Coder-Next abliterated (local)",
+        "envKey": "OLLAMA_API_KEY",
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "generationConfig": {
+          "timeout": 3600000,
+          "streamIdleTimeoutMs": 0,
+          "maxRetries": 1,
+          "contextWindowSize": 65536,
+          "samplingParams": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_tokens": 8192
+          }
+        }
+      },
+      {
+        "id": "coder-official",
+        "name": "Qwen3-Coder-Next official (local)",
+        "envKey": "OLLAMA_API_KEY",
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "generationConfig": {
+          "timeout": 3600000,
+          "streamIdleTimeoutMs": 0,
+          "maxRetries": 1,
+          "contextWindowSize": 65536,
+          "samplingParams": {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "max_tokens": 8192
+          }
+        }
+      }
+    ]
+  },
+  "privacy": {
+    "usageStatisticsEnabled": false
+  },
+  "telemetry": {
+    "enabled": false
+  },
+  "tools": {
+    "truncateToolOutputThreshold": 16000,
+    "truncateToolOutputLines": 400
+  },
+  "context": {
+    "autoCompactThreshold": 0.8
+  },
+  "memory": {
+    "enableManagedAutoMemory": false,
+    "enableManagedAutoDream": false,
+    "enableAutoSkill": false
+  },
+  "ui": {
+    "enableFollowupSuggestions": false
+  }
+}

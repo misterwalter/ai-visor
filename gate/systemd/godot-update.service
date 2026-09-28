@@ -1,0 +1,6 @@
+[Unit]
+Description=Update the flatpak Godot to the latest release
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flatpak update --user -y --noninteractive org.godotengine.Godot

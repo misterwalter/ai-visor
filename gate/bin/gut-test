@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Run the project's GUT suite headless, using its own .gutconfig.json.
+# Exit status is GUT's: 0 when every test passed.
+# Usage: gut-test [project_dir]
+set -u
+here="$(dirname "$(realpath "$0")")"
+exec "$here/godot-headless" "${1:-$PWD}" -s res://addons/gut/gut_cmdln.gd -gexit
