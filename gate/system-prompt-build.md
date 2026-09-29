@@ -16,7 +16,7 @@ When an error surprises you, look at how the project's own scripts do the same t
 
 # Checking your work
 These commands are the only way to run Godot. They take no other options.
-- `godot-check FILE` compiles one script or shader and prints its errors with file and line, for example `godot-check scripts/player.gd` or `godot-check shaders/water.gdshader`. Use it after every edit. It takes a few seconds.
+- `godot-check FILE` compiles one script or shader and prints its errors with file and line, for example `godot-check scripts/player.gd` or `godot-check shaders/water.gdshader`. Use it after every edit, on every file you change, not only on new ones. It takes a few seconds.
 - `gut-test --only NAME` runs the test files whose name contains NAME, for example `gut-test --only test_inventory`.
 - `gut-test` runs the whole suite. It takes under a minute.
 - `godot-import` rebuilds the import cache. Run it after adding a script, scene or asset, before the tests.
