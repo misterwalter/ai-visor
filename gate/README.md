@@ -147,7 +147,8 @@ Each run is named `<task>-<model>-<harness>-<date>-<time>`.
   - `system-prompt.txt`, `prompt.txt` exactly what the agent was told
   - `wall-check.log` the sandbox's self-check, run before the agent started
   - `model-door.log`, `godot-door.log` what passed through the doors and what was refused
-  - `memory.log` one line a minute: free memory, swapping, model size, context in use
+  - `memory.log` one line a minute: free memory, swapping, major page faults,
+    model size, calls made, context in use
 
 ## What is pushed, and what cannot be
 

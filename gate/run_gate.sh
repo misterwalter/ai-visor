@@ -189,17 +189,22 @@ WATCHERS="$!"
 SWAP_LIMIT="${VISOR_SWAP_LIMIT:-50}"   # MB per second, in and out together
 (
   swapped() { awk -v kb="$(( $(getconf PAGESIZE) / 1024 ))" '/^pswp(in|out) /{n += $2} END{print n * kb}' /proc/vmstat; }
-  echo "time available_mb swap_used_mb swap_mb_per_s model_mb calls prompt_tokens" > "$OUT/memory.log"
-  last="$(swapped)"; strikes=0
+  # Swapping is one way a machine short of memory slows down. The other leaves no
+  # trace in swap: the model's weights are dropped from memory and read back from
+  # disk, which shows as major page faults.
+  faulted() { awk '/^pgmajfault /{print $2}' /proc/vmstat; }
+  echo "time available_mb swap_used_mb swap_mb_per_s major_faults_per_s model_mb calls prompt_tokens" > "$OUT/memory.log"
+  last="$(swapped)"; last_faults="$(faulted)"; strikes=0
   while sleep 60 && kill -0 "$AGENT_PID" 2>/dev/null; do
     now="$(swapped)"; rate=$(( (now - last) / 1024 / 60 )); last="$now"
+    now_faults="$(faulted)"; faults=$(( (now_faults - last_faults) / 60 )); last_faults="$now_faults"
     available="$(awk '/^MemAvailable/{print int($2 / 1024)}' /proc/meminfo)"
     swap="$(awk '/^SwapTotal/{t = $2} /^SwapFree/{f = $2} END{print int((t - f) / 1024)}' /proc/meminfo)"
     # The model is held by a runner the model server starts, under a name of its own.
     # Both have "ollama" in their command line; the largest of them holds the model.
     model="$(ps -eo rss=,args= | awk '/ollama/ && $1 > m {m = $1} END{print int(m / 1024)}')"
     tokens="$(answered | tail -1 | jq -r '.prompt_tokens // "-"')"
-    echo "$(date +%H:%M) $available $swap $rate $model $(answered | wc -l) ${tokens:--}" >> "$OUT/memory.log"
+    echo "$(date +%H:%M) $available $swap $rate $faults $model $(answered | wc -l) ${tokens:--}" >> "$OUT/memory.log"
     if [ "$rate" -ge "$SWAP_LIMIT" ]; then
       strikes=$(( strikes + 1 ))
       say "memory: swapping at $rate MB/s, $available MB available ($strikes of 3)"
