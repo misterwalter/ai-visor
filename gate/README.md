@@ -17,6 +17,7 @@ agent, tests before and after, and a report.
 | `install.sh` | Registers the models and the timer. Run it after every `git pull`. |
 | `run_gate.sh` | One run: fresh clone, new branch, baseline tests, agent, tests again, report. |
 | `watch_run.sh` | Prints one status line a minute until a run finishes. |
+| `push_result.sh` | Pushes a run's result branch to the project's home. Refuses anything but a `visor/` branch. |
 | `wall.sh` | Runs a command inside the sandbox. `run_gate.sh` starts the agent through it. |
 | `doors/model-door.py` | The one way from the sandbox to the model. Passes chat requests, refuses the rest, records every call. |
 | `doors/godot-door` | The one way from the sandbox to Godot. Accepts three requests. |
@@ -117,7 +118,9 @@ fails its self-check.
 Each run is named `<task>-<model>-<harness>-<date>-<time>`.
 
 - `/srv/code/work/<run>/` the workspace: a full clone on branch `visor/<run>`,
-  with the agent's changes committed locally. Nothing is pushed.
+  with the agent's changes committed.
+- The project's home (the source clone's `origin`): the same branch, pushed as
+  soon as it is committed. Fetch it with `git fetch origin`.
 - `/srv/code/gate-results/<run>/` the evidence:
   - `report.md` summary, with the error text on top if the agent failed
   - `final-message.md` the agent's closing message: its report, or its plan and questions
@@ -131,6 +134,34 @@ Each run is named `<task>-<model>-<harness>-<date>-<time>`.
   - `wall-check.log` the sandbox's self-check, run before the agent started
   - `model-door.log`, `godot-door.log` what passed through the doors and what was refused
   - `memory.log` one line a minute: free memory, swapping, model size, context in use
+
+## What is pushed, and what cannot be
+
+Every commit the runner makes is pushed at once, to a branch named
+`visor/<run>` on the project's home. The commit message carries the agent's exit
+status and the test results, and says the work is unreviewed.
+
+Nothing here can push to `main`. There are two locks, and neither has an
+option to open it:
+
+- `push_result.sh` refuses any branch whose name does not start with `visor/`.
+  It names the destination in full, so a branch can only land on the branch of
+  the same name, and it never forces, so it cannot overwrite other work.
+- Each workspace gets a `pre-push` hook, so git itself refuses a push to
+  anything but a `visor/` branch, whoever types the command. The agent cannot
+  remove the hook: `.git` is read-only inside the sandbox.
+
+Both locks are on this machine. The account that pushes still holds a key that
+the project's host would accept for `main`. A branch protection rule on the
+host is the one lock that holds against everything, this repo's bugs included.
+
+```bash
+./gate/push_result.sh /path/to/project /srv/code/work/<run>
+```
+
+- Pushes the result of an earlier run by hand. The first argument is the
+  project's local clone, which knows where the project's home is. The second
+  is the run's workspace.
 
 ## The sandbox
 

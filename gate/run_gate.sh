@@ -64,6 +64,18 @@ cd "$WORK" || exit 1
 # Tasks always start from main. No fallback: branching from anything else would
 # produce a plausible-looking result built on the wrong code.
 git checkout --quiet -b "visor/$RUN" origin/main || { say "no main branch in $REPO_SRC"; exit 1; }
+# A second lock behind the one in push_result.sh: git itself refuses any push
+# from this workspace that is not to a visor/ branch, whoever types it.
+cat > "$WORK/.git/hooks/pre-push" <<'HOOK'
+#!/bin/sh
+while read -r local_ref local_id remote_ref remote_id; do
+  case "$remote_ref" in
+    refs/heads/visor/?*) ;;
+    *) echo "pre-push: REFUSED: $remote_ref is not a visor/ branch" >&2; exit 1 ;;
+  esac
+done
+HOOK
+chmod +x "$WORK/.git/hooks/pre-push"
 
 # The project's own rules for contributors, whichever name it keeps them under.
 RULES=""
@@ -219,15 +231,28 @@ REFUSED=$(( $(refusals) - REFUSED_BY_CHECK ))
 harness_final_message > "$OUT/final-message.md" 2> /dev/null
 [ -s "$OUT/final-message.md" ] || say "WARNING: the agent left no closing message"
 
-AFTER="n/a"
+AFTER="n/a"; PUSHED="nothing to push"
 if [ "$PLAN_ONLY" = 0 ]; then
   say "tests after"
   gut-test "$WORK" > "$OUT/tests-after.log" 2>&1; AFTER=$?
   git add -A
   git diff --cached --stat > "$OUT/diffstat.txt"
   git diff --cached > "$OUT/changes.diff"
-  git -c user.name="visor" -c user.email="visor@localhost" commit --quiet -m "visor gate: $NAME ($MODEL, $HARNESS)" \
-    || say "nothing to commit"
+  # The state of the work travels with the commit, so it can be read wherever the
+  # branch is looked at.
+  if git -c user.name="visor" -c user.email="visor@localhost" commit --quiet \
+       -m "visor gate: $NAME ($MODEL, $HARNESS)" \
+       -m "Written by an agent and not yet reviewed.
+agent exit: $AGENT   tests before: exit $BEFORE   tests after: exit $AFTER"; then
+    if "$HERE/push_result.sh" "$REPO_SRC" "$WORK" > "$OUT/push.log" 2>&1; then
+      PUSHED="yes, as visor/$RUN"
+    else
+      PUSHED="NO -- $(tail -1 "$OUT/push.log")"
+      say "PUSH FAILED -- see $OUT/push.log"
+    fi
+  else
+    say "nothing to commit"
+  fi
 fi
 
 {
@@ -256,6 +281,7 @@ fi
   echo "- wall: $(grep -c '^ok' "$OUT/wall-check.log") checks passed before the agent started;" \
        "the doors refused $REFUSED requests from the agent"
   echo "- branch: visor/$RUN   workspace: $WORK"
+  echo "- pushed: $PUSHED"
   echo
   if [ "$PLAN_ONLY" = 0 ]; then
     echo "## Files changed"
