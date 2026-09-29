@@ -31,6 +31,9 @@ func _initialize() -> void:
 	if path.ends_with(".gdshader"):
 		var shader := Shader.new()
 		shader.code = FileAccess.get_file_as_string(path)
+		# Setting the code compiles nothing. Asking for the uniforms does, and that
+		# is when the engine prints the errors.
+		shader.get_shader_uniform_list()
 		print("CHECK COMPILED: %s" % path)
 		quit(0)
 		return
