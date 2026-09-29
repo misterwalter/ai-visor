@@ -97,7 +97,9 @@ Options for `run_gate.sh`:
 
 Environment variables:
 
-- `VISOR_MAX_TURNS` cap on agent turns (default 150). Qwen Code only; pi has no such cap.
+- `VISOR_MAX_REPEATS` how many times in a row the agent may make the very same
+  tool call before the run is stopped as stuck (default 8).
+- `VISOR_MAX_CALLS` cap on calls to the model in one run (default 300).
 - `VISOR_MAX_TIME` cap on wall-clock time (default `6h`).
 - `VISOR_TEST_TIME` cap on one test run the agent asks for (default `15m`).
 - `VISOR_SWAP_LIMIT` swapping, in MB per second, that stops a run when it lasts
@@ -142,7 +144,8 @@ Each run is named `<task>-<model>-<harness>-<date>-<time>`.
   - `changes.diff`, `diffstat.txt` what it changed
   - `tests-before.log`, `tests-after.log` the suite on either side of the change
   - `model-calls.jsonl` one line per call to the model, written by the model
-    door: tools offered, tokens, seconds
+    door: tools offered, tokens, seconds, and how often the agent has repeated
+    itself
   - `agent-output.json` or `.jsonl` what the harness printed, `agent.err` its errors
   - `harness-log/` the harness's own records, written from inside the sandbox
   - `system-prompt.txt`, `prompt.txt` exactly what the agent was told

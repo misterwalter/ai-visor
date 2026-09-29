@@ -9,6 +9,7 @@ You are inside a sandbox. The repository is the only place you can write. There 
 - If something is ambiguous, choose the most reasonable reading and say in your final message what you assumed.
 - If you cannot complete the task, say so plainly and explain what stopped you. Never claim a result you have not verified.
 - If a command fails, read its message and its usage before trying a variation. Do not guess at options.
+- If a tool or command does not exist, it will not exist the next time either. Do not repeat a call that failed; do something else.
 
 # Tools
 - Use absolute paths.

@@ -184,6 +184,29 @@ AGENT_PID=$!
 ) &
 WATCHERS="$!"
 
+# Guard: an agent that is stuck repeats itself. One made the same call 1,203
+# times over six hours. The model door counts how often in a row the agent has
+# made the very same tool call; past the limit, the run ends. The cap on calls
+# is the backstop for a loop that varies.
+MAX_REPEATS="${VISOR_MAX_REPEATS:-8}"
+MAX_CALLS="${VISOR_MAX_CALLS:-300}"
+(
+  while sleep 20 && kill -0 "$AGENT_PID" 2>/dev/null; do
+    repeats="$(tail -1 "$CALLS" | jq -r '.repeats // 0')"
+    calls="$(answered | wc -l)"
+    if [ "${repeats:-0}" -ge "$MAX_REPEATS" ]; then
+      echo "the agent made the same tool call $repeats times in a row" > "$OUT/stopped-as-stuck.txt"
+    elif [ "$calls" -ge "$MAX_CALLS" ]; then
+      echo "the agent made $calls calls to the model, the most a run is allowed" > "$OUT/stopped-as-stuck.txt"
+    else
+      continue
+    fi
+    kill "$AGENT_PID"
+    break
+  done
+) &
+WATCHERS="$WATCHERS $!"
+
 # Memory watch: one line a minute, so a run can be read afterwards as memory
 # against context size. A machine that swaps hard for three minutes running is
 # no longer doing useful work, and the run is stopped.
@@ -228,6 +251,7 @@ say "agent exit=$AGENT after $(( (T1-T0)/60 )) min"
 [ "$AGENT" = 0 ] || say "AGENT FAILED -- see $OUT/agent.err"
 [ -f "$OUT/unexpected-tools.txt" ] \
   && say "STOPPED: the harness offered tools outside the allowed set: $(cat "$OUT/unexpected-tools.txt")"
+[ -f "$OUT/stopped-as-stuck.txt" ] && say "STOPPED: $(cat "$OUT/stopped-as-stuck.txt")"
 if [ -f "$OUT/stopped-by-memory.txt" ]; then
   say "STOPPED: $(cat "$OUT/stopped-by-memory.txt")"
   ollama stop "$MODEL" || say "WARNING: could not unload $MODEL"
@@ -271,6 +295,8 @@ fi
       && echo "Stopped by the tool guard. Unexpected tools: $(cat "$OUT/unexpected-tools.txt")"
     [ -f "$OUT/stopped-by-memory.txt" ] \
       && echo "Stopped by the memory watch: $(cat "$OUT/stopped-by-memory.txt")."
+    [ -f "$OUT/stopped-as-stuck.txt" ] \
+      && echo "Stopped as stuck: $(cat "$OUT/stopped-as-stuck.txt")."
     echo '```'; tail -20 "$OUT/agent.err"; echo '```'
     echo
   fi

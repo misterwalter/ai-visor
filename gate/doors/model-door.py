@@ -12,6 +12,10 @@ Every request passed is recorded in the calls file, one JSON object per line:
 what was asked (message count, tools offered) and what it cost (tokens,
 seconds). The file is written out here, where the agent cannot alter it.
 
+Each record also says how many times in a row the agent has made the very same
+tool call. An agent that is stuck repeats itself, and the runner stops a run
+when that number passes its limit.
+
 Usage: model-door.py <socket path> <upstream host:port> <model> <calls file>
 """
 
@@ -44,6 +48,8 @@ class Door(http.server.BaseHTTPRequestHandler):
     model = None
     calls_file = None
     calls_lock = threading.Lock()
+    last_move = None   # the agent's latest tool calls, as text
+    repeats = 0        # how many requests in a row have carried that same move
 
     def log_message(self, format, *args):
         pass  # the default logger wants a client address, and a unix socket has none
@@ -69,6 +75,24 @@ class Door(http.server.BaseHTTPRequestHandler):
         with self.calls_lock, open(self.calls_file, "a") as calls:
             calls.write(json.dumps(entry) + "\n")
 
+    @classmethod
+    def count_repeats(cls, request):
+        """How many requests in a row, this one included, follow the same tool calls."""
+        move = None
+        for message in reversed(request.get("messages") or []):
+            if isinstance(message, dict) and message.get("role") == "assistant":
+                calls = message.get("tool_calls") or []
+                move = json.dumps([[c.get("function", {}).get("name"), c.get("function", {}).get("arguments")]
+                                   for c in calls if isinstance(c, dict)])
+                break
+        with cls.calls_lock:
+            if move is not None and move != "[]" and move == cls.last_move:
+                cls.repeats += 1
+            else:
+                cls.repeats = 1 if move not in (None, "[]") else 0
+            cls.last_move = move
+            return cls.repeats
+
     def do_POST(self):
         if self.path != ALLOWED_PATH:
             return self.refuse()
@@ -81,6 +105,7 @@ class Door(http.server.BaseHTTPRequestHandler):
             asked_model = request.get("model")
             tools = [tool["function"]["name"] for tool in request.get("tools") or []]
             messages = len(request.get("messages") or [])
+            repeats = self.count_repeats(request)
         except (ValueError, AttributeError, KeyError, TypeError):
             return self.refuse("the request is not a chat request")
         # An empty request is how the wall's self-check knocks; the model server rejects it.
@@ -89,7 +114,7 @@ class Door(http.server.BaseHTTPRequestHandler):
 
         started = time.time()
         entry = {"time": time.strftime("%H:%M:%S"), "messages": messages, "tools": tools,
-                 "request_bytes": len(body), "status": None,
+                 "repeats": repeats, "request_bytes": len(body), "status": None,
                  "prompt_tokens": None, "completion_tokens": None, "seconds": None}
         upstream = http.client.HTTPConnection(*self.upstream, timeout=None)
         try:

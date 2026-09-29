@@ -2,7 +2,7 @@
 # MODEL, PLAN_ONLY and OUT.
 #
 # Settings: pi/settings.json and pi/models.json, which the wall puts where the
-# harness looks. pi has no cap on turns, so VISOR_MAX_TURNS does not apply.
+# harness looks. pi has no limit on time of its own, so it runs under `timeout`.
 
 # The only tools the agent may be offered. run_gate.sh checks the first request
 # against this list. pi has no plan mode: a plan-only round gets tools that
