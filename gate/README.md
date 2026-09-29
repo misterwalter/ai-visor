@@ -18,6 +18,7 @@ agent, tests before and after, and a report.
 | `run_gate.sh` | One run: fresh clone, new branch, baseline tests, agent, tests again, report. |
 | `watch_run.sh` | Prints one status line a minute until a run finishes. |
 | `push_result.sh` | Pushes a run's result branch to the project's home. Refuses anything but a `visor/` branch. |
+| `open_pr.sh` | Opens a pull request for that branch, when the project's home is on GitHub. |
 | `wall.sh` | Runs a command inside the sandbox. `run_gate.sh` starts the agent through it. |
 | `doors/model-door.py` | The one way from the sandbox to the model. Passes chat requests, refuses the rest, records every call. |
 | `doors/godot-door` | The one way from the sandbox to Godot. Accepts three requests. |
@@ -150,6 +151,12 @@ option to open it:
 - Each workspace gets a `pre-push` hook, so git itself refuses a push to
   anything but a `visor/` branch, whoever types the command. The agent cannot
   remove the hook: `.git` is read-only inside the sandbox.
+
+When the project's home is on GitHub, a pull request against `main` is opened
+for the branch. Its body is the run's report, which ends with the agent's own
+closing message, and its title begins `[visor]`, `[visor: TESTS FAIL]` or
+`[visor: AGENT FAILED]`. Opening one changes nothing on `main`; merging it is
+yours to do. It needs the `gh` program, signed in.
 
 Both locks are on this machine. The account that pushes still holds a key that
 the project's host would accept for `main`. A branch protection rule on the

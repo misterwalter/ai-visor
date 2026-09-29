@@ -231,7 +231,7 @@ REFUSED=$(( $(refusals) - REFUSED_BY_CHECK ))
 harness_final_message > "$OUT/final-message.md" 2> /dev/null
 [ -s "$OUT/final-message.md" ] || say "WARNING: the agent left no closing message"
 
-AFTER="n/a"; PUSHED="nothing to push"
+AFTER="n/a"; PUSHED="nothing to push"; PULL_REQUEST="none"
 if [ "$PLAN_ONLY" = 0 ]; then
   say "tests after"
   gut-test "$WORK" > "$OUT/tests-after.log" 2>&1; AFTER=$?
@@ -246,6 +246,7 @@ if [ "$PLAN_ONLY" = 0 ]; then
 agent exit: $AGENT   tests before: exit $BEFORE   tests after: exit $AFTER"; then
     if "$HERE/push_result.sh" "$REPO_SRC" "$WORK" > "$OUT/push.log" 2>&1; then
       PUSHED="yes, as visor/$RUN"
+      OPEN_PULL_REQUEST=1
     else
       PUSHED="NO -- $(tail -1 "$OUT/push.log")"
       say "PUSH FAILED -- see $OUT/push.log"
@@ -292,6 +293,24 @@ fi
   echo
   cat "$OUT/final-message.md"
 } > "$OUT/report.md"
+
+# The pull request carries the report, the agent's closing message included, and
+# its title says at a glance whether the work is whole.
+if [ "${OPEN_PULL_REQUEST:-0}" = 1 ]; then
+  STATE="visor"
+  [ "$AFTER" = 0 ] || STATE="visor: TESTS FAIL"
+  [ "$AGENT" = 0 ] || STATE="visor: AGENT FAILED"
+  TITLE="[$STATE] $(head -1 "$TASK" | cut -c1-70)"
+  if PULL_REQUEST="$("$HERE/open_pr.sh" "$REPO_SRC" "$WORK" "$TITLE" "$OUT/report.md" 2> "$OUT/pull-request.log" | tail -1)" \
+     && [ -n "$PULL_REQUEST" ]; then
+    say "pull request: $PULL_REQUEST"
+  else
+    PULL_REQUEST="NOT OPENED -- $(tail -1 "$OUT/pull-request.log")"
+    say "PULL REQUEST NOT OPENED -- see $OUT/pull-request.log"
+  fi
+fi
+# Added after the pull request was opened, since the report is its body.
+{ echo; echo "## Pull request"; echo; echo "$PULL_REQUEST"; } >> "$OUT/report.md"
 say "done -> $OUT/report.md"
 echo "GATE_RUN_DONE"
 exit "$AGENT"
