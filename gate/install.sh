@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Put this repo's harness settings, models and timer in place for the current user.
+# Register this repo's models and timer for the current user.
 # Safe to run again after every `git pull`.
+#
+# Harness settings need no installing: the wall hands each harness the files in
+# this repo (qwen-settings.json, pi/) every time it starts one.
 set -eu
 HERE="$(dirname "$(realpath "$0")")"
-
-mkdir -p "$HOME/.qwen"
-cp "$HERE/qwen-settings.json" "$HOME/.qwen/settings.json"
-echo "harness settings installed"
 
 # Register a model only when its weights are already on disk; never download here.
 for build in abliterated official; do

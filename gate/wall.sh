@@ -7,11 +7,11 @@
 #
 # <workspace>  the project clone the agent works in
 # <wall dir>   holds the two door sockets; seen inside as /run/gate
-# <log dir>    where the harness writes its request log; writable inside
+# <log dir>    where the harness keeps its own records; writable inside
 # rw | ro      whether the workspace can be written (ro for a plan-only round)
 #
 # What is visible inside, and how:
-#   read-only   /usr and /etc, the harness, its settings, gate/inside
+#   read-only   /usr and /etc, the harnesses, their settings from this repo, gate/inside
 #   writable    the workspace (its .git read-only), the log dir, an empty home, /tmp
 #   absent      everything else: the real home, other runs, the source clone, notes
 # The network is a private one with nothing on it. The command is started through
@@ -24,9 +24,8 @@ shift 4
 [ $# -gt 0 ] || { echo "wall: command required" >&2; exit 2; }
 
 HERE="$(dirname "$(realpath "$0")")"
-HARNESS="$HOME/.npm-global"
-SETTINGS="$HOME/.qwen/settings.json"
-for needed in "$WORK/.git" "$WALL" "$LOGS" "$HARNESS" "$SETTINGS"; do
+HARNESSES="$HOME/.npm-global"
+for needed in "$WORK/.git" "$WALL" "$LOGS" "$HARNESSES"; do
   [ -e "$needed" ] || { echo "wall: missing $needed" >&2; exit 1; }
 done
 
@@ -47,16 +46,26 @@ getent group root nogroup "$(id -g)" > "$WALL/group"
 hidden=()
 [ -d /usr/share/ollama ] && hidden+=(--tmpfs /usr/share/ollama)
 
-# Nothing is inherited from the caller's environment except the harness's own
-# QWEN_* settings.
+# Each harness reads its settings from the home folder. Inside the wall those
+# are this repo's files, so a run cannot pick up a copy that has drifted.
+settings=(
+  --dir "$HOME/.qwen"
+  --ro-bind "$HERE/qwen-settings.json" "$HOME/.qwen/settings.json"
+  --dir "$HOME/.pi/agent"
+  --ro-bind "$HERE/pi/settings.json" "$HOME/.pi/agent/settings.json"
+  --ro-bind "$HERE/pi/models.json" "$HOME/.pi/agent/models.json"
+)
+
+# Nothing is inherited from the caller's environment except the harnesses' own
+# QWEN_* and PI_* settings.
 environment=(
   --setenv HOME "$HOME"
   --setenv USER "$(id -un)"
-  --setenv PATH "$HERE/inside:$HARNESS/bin:/usr/local/bin:/usr/bin:/bin"
+  --setenv PATH "$HERE/inside:$HARNESSES/bin:/usr/local/bin:/usr/bin:/bin"
   --setenv LANG C.UTF-8
   --setenv TERM dumb
 )
-for name in $(compgen -v QWEN_); do
+for name in $(compgen -v QWEN_) $(compgen -v PI_); do
   environment+=(--setenv "$name" "${!name}")
 done
 
@@ -71,8 +80,8 @@ exec bwrap \
   "${hidden[@]}" \
   --proc /proc --dev /dev --tmpfs /tmp --tmpfs /run \
   --tmpfs "$HOME" \
-  --ro-bind "$HARNESS" "$HARNESS" \
-  --dir "$HOME/.qwen" --ro-bind "$SETTINGS" "$SETTINGS" \
+  --ro-bind "$HARNESSES" "$HARNESSES" \
+  "${settings[@]}" \
   --ro-bind "$HERE/inside" "$HERE/inside" \
   --ro-bind "$WALL" /run/gate \
   "${workspace[@]}" \

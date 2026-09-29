@@ -4,24 +4,28 @@ Real tasks, run through an off-the-shelf coding agent on a CPU-only server, to
 find out how much a local model can be trusted to do. Nothing here is a
 pipeline. It is the test that says what is worth building.
 
-The agent loop is [Qwen Code](https://github.com/QwenLM/qwen-code). These
-scripts are the wrapper around it: a fresh copy of the project for every task,
-a sandbox around the agent, tests before and after, and a report.
+The agent loop is off the shelf, and there are two to compare:
+[Qwen Code](https://github.com/QwenLM/qwen-code) and
+[pi](https://github.com/earendil-works/pi). These scripts are the wrapper
+around them: a fresh copy of the project for every task, a sandbox around the
+agent, tests before and after, and a report.
 
 ## What is here
 
 | File | What it does |
 |---|---|
-| `install.sh` | Puts the settings, models and timer in place. Run it after every `git pull`. |
+| `install.sh` | Registers the models and the timer. Run it after every `git pull`. |
 | `run_gate.sh` | One run: fresh clone, new branch, baseline tests, agent, tests again, report. |
 | `watch_run.sh` | Prints one status line a minute until a run finishes. |
 | `wall.sh` | Runs a command inside the sandbox. `run_gate.sh` starts the agent through it. |
-| `doors/model-door.py` | The one way from the sandbox to the model. Passes chat requests, refuses the rest. |
+| `doors/model-door.py` | The one way from the sandbox to the model. Passes chat requests, refuses the rest, records every call. |
 | `doors/godot-door` | The one way from the sandbox to Godot. Accepts three requests. |
 | `inside/` | The programs the agent finds inside the sandbox: `gut-test`, `godot-import`, and the self-check. |
 | `system-prompt.md` | The agent's standing instructions, kept short on purpose. |
 | `system-prompt-build.md`, `system-prompt-plan.md` | What is added for a build round or a plan-only round. |
-| `qwen-settings.json` | Harness settings, installed as `~/.qwen/settings.json`. |
+| `harness/qwen.sh`, `harness/pi.sh` | How each agent loop is started, and the tools it may offer. |
+| `qwen-settings.json` | Settings for Qwen Code. |
+| `pi/settings.json`, `pi/models.json` | Settings for pi, and where it finds the model. |
 | `Modelfile.*` | Ollama recipes: which weights, context size, sampling settings. |
 | `bin/godot-headless` | Runs the flatpak Godot with no window against a project folder, walled in. |
 | `bin/godot-import` | Builds the `.godot` import cache a fresh clone lacks. |
@@ -41,20 +45,25 @@ git pull
 ```
 
 - `git pull` fetches the latest version of these scripts.
-- `install.sh` copies `qwen-settings.json` to `~/.qwen/settings.json`, registers
-  each model whose weights are already on disk, and enables the Godot update
-  timer. It never downloads anything, and it is safe to run again.
+- `install.sh` registers each model whose weights are already on disk and
+  enables the Godot update timer. It never downloads anything, and it is safe
+  to run again.
+- Harness settings need no installing. The sandbox hands each harness the
+  settings files in this repo every time it starts one, so a run cannot pick up
+  a copy that has drifted.
 
 Not done by `install.sh`, because each is an install you should approve yourself:
 
 ```bash
 npm install -g @qwen-code/qwen-code
+npm install -g @earendil-works/pi-coding-agent
 flatpak install --user flathub org.godotengine.Godot
 ollama pull <weights named on the FROM line of a Modelfile>
 ```
 
-- `npm install -g` installs the agent for the current user. `-g` means "global",
-  which here is the user's own npm folder, not the system.
+- `npm install -g` installs an agent loop for the current user. `-g` means
+  "global", which here is the user's own npm folder, not the system. Add
+  `@<version>` to the name to install one exact version.
 - `flatpak install --user` installs Godot for the current user only. No sudo.
 - `ollama pull` downloads model weights, about 50 GB each.
 
@@ -65,15 +74,15 @@ cannot find and stops.
 ## Running one task
 
 ```bash
-nohup ./gate/run_gate.sh /path/to/project /path/to/task.md coder-abliterated > ~/gate.log 2>&1 & disown
+nohup ./gate/run_gate.sh /path/to/project /path/to/task.md coder-abliterated qwen > ~/gate.log 2>&1 & disown
 ./gate/watch_run.sh ~/gate.log
 ```
 
 - `nohup … &` starts the run in the background and keeps it alive if the SSH
   session drops. `disown` removes it from the shell's job list for the same reason.
 - `> ~/gate.log 2>&1` sends both normal output and errors to one log file.
-- The three arguments are the project's local clone, the task file, and the
-  Ollama model name.
+- The four arguments are the project's local clone, the task file, the Ollama
+  model name, and the agent loop: `qwen` or `pi`.
 - `watch_run.sh` only reads. Stopping it with Ctrl-C does not stop the run.
 
 Options for `run_gate.sh`:
@@ -84,14 +93,14 @@ Options for `run_gate.sh`:
 
 Environment variables:
 
-- `VISOR_MAX_TURNS` cap on agent turns (default 150).
+- `VISOR_MAX_TURNS` cap on agent turns (default 150). Qwen Code only; pi has no such cap.
 - `VISOR_MAX_TIME` cap on wall-clock time (default `6h`).
 - `VISOR_TEST_TIME` cap on one test run the agent asks for (default `15m`).
 - `VISOR_SWAP_LIMIT` swapping, in MB per second, that stops a run when it lasts
   three minutes (default 50).
 
-The run refuses to start if the installed settings differ from the copy in this
-repo, if the project has no `main` branch, or if the sandbox fails its self-check.
+The run refuses to start if the project has no `main` branch or if the sandbox
+fails its self-check.
 
 ## Running the tests yourself
 
@@ -105,16 +114,19 @@ repo, if the project has no `main` branch, or if the sandbox fails its self-chec
 
 ## Where results go
 
-Each run is named `<task>-<model>-<date>-<time>`.
+Each run is named `<task>-<model>-<harness>-<date>-<time>`.
 
 - `/srv/code/work/<run>/` the workspace: a full clone on branch `visor/<run>`,
   with the agent's changes committed locally. Nothing is pushed.
 - `/srv/code/gate-results/<run>/` the evidence:
   - `report.md` summary, with the error text on top if the agent failed
+  - `final-message.md` the agent's closing message: its report, or its plan and questions
   - `changes.diff`, `diffstat.txt` what it changed
   - `tests-before.log`, `tests-after.log` the suite on either side of the change
-  - `agent.json` the agent's own account, `agent.err` its errors
-  - `api-log/` every request and reply between harness and model
+  - `model-calls.jsonl` one line per call to the model, written by the model
+    door: tools offered, tokens, seconds
+  - `agent-output.json` or `.jsonl` what the harness printed, `agent.err` its errors
+  - `harness-log/` the harness's own records, written from inside the sandbox
   - `system-prompt.txt`, `prompt.txt` exactly what the agent was told
   - `wall-check.log` the sandbox's self-check, run before the agent started
   - `model-door.log`, `godot-door.log` what passed through the doors and what was refused
@@ -150,9 +162,11 @@ project folder alone.
 **Two doors.** Godot's flatpak cannot start inside wall 1, and the harness
 needs to reach the model, so the wall has two narrow openings:
 
-- **The model door** passes `POST /v1/chat/completions` and refuses everything
-  else. The model server can also pull, push and delete models, and a pull is
-  an outbound request to an address of the caller's choosing.
+- **The model door** passes `POST /v1/chat/completions` for the run's model and
+  refuses everything else. The model server can also pull, push and delete
+  models, and a pull is an outbound request to an address of the caller's
+  choosing. The door records every call in `model-calls.jsonl`, outside the
+  wall, so the count of calls and tokens does not rest on the agent's honesty.
 - **The test door** accepts `import`, `test` and `test NAME`. It runs one Godot
   at a time, inside wall 2, and sends back the output.
 
@@ -167,8 +181,8 @@ the agent is not started.
 - It does not make the agent's code safe. That code runs on your machine when
   you run the project, so reviewing the diff remains the safeguard.
 - It does not limit processor time or disk space.
-- The agent can alter the request log of its own run, which the harness writes
-  from inside the wall.
+- The agent can alter `harness-log/`, which the harness writes from inside the
+  wall. Nothing in the report is taken from it.
 - It rests on the kernel's namespaces, as flatpak does. A kernel flaw could
   breach it.
 
@@ -192,30 +206,36 @@ three files, and the first run failed for that reason.
   summary, and an agent that had lost its test command went looking for Godot
   across the system.
 - **Only the task in the prompt.**
-- **Six tools:** read, write, edit, search, find files, shell. The list is in
-  `run_gate.sh`. A guard checks the first request of every run and stops the run
-  if the harness offered anything else, which a harness update could cause.
-- **`--safe-mode`.** Without it the harness acts on files it finds in the
-  project. It will start whatever a project's `.mcp.json` names, which means
-  downloading and running a package nobody approved.
+- **Six tools:** read, write, edit, search, find files, shell. Each harness's
+  list is in `harness/`. A guard checks the first request of every run and
+  stops the run if the harness offered anything else, which a harness update
+  could cause.
+- **Nothing discovered from the project.** Qwen Code runs with `--safe-mode`:
+  without it, it will start whatever a project's `.mcp.json` names, which means
+  downloading and running a package nobody approved. pi runs with its
+  extensions, skills and project settings switched off.
 - **Background features off** in `qwen-settings.json`. Automatic memory, memory
   consolidation and follow-up suggestions each make model calls of their own.
   With one model on one CPU they add minutes and evict the cached prompt.
 - **Usage reporting off.** Web tools are among those excluded.
 - **Tool output truncated** at 16,000 characters, so one large file cannot fill
   the context.
-- **No cap on the length of one reply.** The harness gives up on a reply after
+- **No cap on the length of one reply.** Qwen Code gives up on a reply after
   15 minutes unless `QWEN_STREAM_MAX_LIFETIME_MS=0` is set, and no entry in its
-  settings file covers that.
-- **Memory watch.** A window that loads is not a window that fits: memory use
-  grows as the context fills. The runner logs memory every minute and stops a
-  run that swaps hard for three minutes.
+  settings file covers that. pi gives up after 5 minutes of silence unless
+  `httpIdleTimeoutMs` is 0, and the model is silent while it reads a prompt.
+- **Memory watch.** The model leaves about 5 GB of a 62 GB machine free. The
+  runner logs memory every minute and stops a run that swaps hard for three
+  minutes.
 
 ### When the harness summarises
 
-The harness summarises the conversation when it nears the end of the context
-window, and on this hardware one summary costs 25 to 40 minutes. When it
-happens is fixed inside the harness:
+A harness summarises the conversation when it nears the end of the context
+window, and on this hardware one summary costs 25 to 40 minutes.
+
+In pi the point is a setting: it summarises when the context passes the window
+less `compaction.reserveTokens`, which is 49,152 tokens as set here. In Qwen
+Code it is fixed inside the harness:
 
 ```
 trigger = the smaller of  (threshold x window)  and  (window - 33,000)
@@ -227,7 +247,7 @@ trigger = the smaller of  (threshold x window)  and  (window - 33,000)
 - The 33,000 is room the harness reserves for writing the summary. It cannot be
   set.
 
-So the context window stays at 65,536, and the settings that remain are the
-ones that make a summary cheaper: two files restored afterwards in place of
+So the context window stays at 65,536, and for Qwen Code the settings that
+remain are the ones that make a summary cheaper: two files restored afterwards in place of
 five, and no clearing of old tool results, which would rewrite the conversation
 and evict the cached prompt. Read the formula again after a harness upgrade.

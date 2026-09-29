@@ -1,0 +1,17 @@
+{
+  "defaultProvider": "ollama",
+  "defaultThinkingLevel": "off",
+  "cacheWarming": "off",
+  "defaultProjectTrust": "never",
+  "httpIdleTimeoutMs": 0,
+  "retry": {
+    "maxRetries": 1
+  },
+  "compaction": {
+    "reserveTokens": 16384,
+    "keepRecentTokens": 12000
+  },
+  "quietStartup": true,
+  "enableInstallTelemetry": false,
+  "enableAnalytics": false
+}

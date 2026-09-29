@@ -1,6 +1,6 @@
 # This round: make the change
 - Make the smallest change that fully does the task. Do not refactor, rename or reformat code the task does not require.
-- Use edit to change an existing file. Use write_file only for a new file.
+- Change an existing file with the edit tool. Write a whole file only when it is new.
 - Add or update tests for behaviour you change, where practical.
 
 # Tests
