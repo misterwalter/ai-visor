@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run the project's GUT suite headless, using its own .gutconfig.json.
-# Exit status is GUT's: 0 when every test passed.
+# Exit status 0 means tests ran and every one passed.
 # Usage: gut-test <project_dir> [--only NAME]
 #
 # --only NAME   run only the test files whose name contains NAME
@@ -15,4 +15,13 @@ if [ $# -gt 0 ]; then
   [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "gut-test: not a test file name: $name" >&2; exit 2; }
   select=(-gselect="$name")
 fi
-exec "$here/godot-headless" "$proj" -s res://addons/gut/gut_cmdln.gd -gexit "${select[@]}"
+
+output="$("$here/godot-headless" "$proj" -s res://addons/gut/gut_cmdln.gd -gexit "${select[@]}" 2>&1)"
+status=$?
+printf '%s\n' "$output"
+# GUT exits 0 when a name matches no test file, which would read as a pass.
+if [ "$status" = 0 ] && ! grep -qaE '^Tests +[1-9]' <<< "$output"; then
+  echo "gut-test: FAILED: no tests ran"
+  exit 1
+fi
+exit "$status"
