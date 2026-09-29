@@ -1,6 +1,7 @@
 # Official Qwen3-Coder-Next (Unsloth dynamic Q4_K_XL), configured for agent work.
-# Sampling follows Qwen's published recommendations; num_ctx is the largest
-# context this 62 GB box holds without swapping.
+# Sampling follows Qwen's published recommendations. num_ctx must stay well
+# above 33,000: the harness summarises at that many tokens short of the window
+# (see the README), so a smaller window leaves the agent no room to work.
 FROM hf.co/unsloth/Qwen3-Coder-Next-GGUF:UD-Q4_K_XL
 PARAMETER num_ctx 65536
 PARAMETER temperature 1.0

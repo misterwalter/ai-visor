@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Prove the wall from the inside, before the agent is let in. Prints one line per
+# check and exits 1 if any failed.
+#
+#   check-wall <rw|ro> <workspace> <path that must be hidden>...
+set -u
+ACCESS="${1:?rw or ro required}"; WORK="${2:?workspace required}"; shift 2
+failed=0
+ok()   { echo "ok    $1"; }
+fail() { echo "FAIL  $1"; failed=1; }
+
+can_write() { local probe="$1/.wall-probe-$$"; touch "$probe" 2>/dev/null && rm -f "$probe"; }
+
+# Status of one HTTP request to the model's address, or "none" if nothing answered.
+http_status() {
+  python3 - "$1" "$2" <<'EOF' 2>/dev/null || echo none
+import http.client, sys
+method, path = sys.argv[1], sys.argv[2]
+connection = http.client.HTTPConnection("127.0.0.1", 11434, timeout=30)
+connection.request(method, path, body="{}" if method == "POST" else None,
+                   headers={"Content-Type": "application/json"})
+print(connection.getresponse().status)
+EOF
+}
+
+for path in "$@"; do
+  if [ -e "$path" ]; then fail "visible, must be hidden: $path"; else ok "hidden: $path"; fi
+done
+
+if [ "$ACCESS" = rw ]; then
+  if can_write "$WORK"; then ok "workspace is writable"; else fail "workspace is not writable"; fi
+else
+  if can_write "$WORK"; then fail "workspace is writable in a plan-only round"; else ok "workspace is read-only"; fi
+fi
+if can_write "$WORK/.git"; then fail ".git is writable"; else ok ".git is read-only"; fi
+if can_write /usr; then fail "/usr is writable"; else ok "/usr is read-only"; fi
+if can_write /etc; then fail "/etc is writable"; else ok "/etc is read-only"; fi
+
+accounts="$(wc -l < /etc/passwd)"
+if [ "$accounts" -le 3 ]; then ok "account list holds $accounts entries"; else fail "account list holds $accounts entries"; fi
+
+if timeout 5 bash -c 'echo > /dev/tcp/1.1.1.1/443' 2>/dev/null; then fail "the network is open"; else ok "the network is closed"; fi
+
+# An empty chat request is one the model server rejects without loading a model.
+status="$(http_status POST /v1/chat/completions)"
+if [ "$status" = 400 ]; then ok "model door passes chat requests"; else fail "model door: chat request got $status, expected 400"; fi
+status="$(http_status GET /api/tags)"
+if [ "$status" = 403 ]; then ok "model door refuses everything else"; else fail "model door: GET /api/tags got $status, expected 403"; fi
+
+answer="$("$(dirname "$(realpath "$0")")/door-request" bogus 2>&1)"; status=$?
+if [ "$status" = 2 ] && [[ "$answer" == *"accepts only"* ]]; then
+  ok "test door refuses unknown requests"
+else
+  fail "test door: unknown request got status $status: $answer"
+fi
+
+[ "$failed" = 0 ] && echo "WALL_OK"
+exit "$failed"

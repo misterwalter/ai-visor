@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Rebuild Godot's import cache. Needed after adding scripts, scenes or assets.
+# Usage: godot-import
+set -u
+[ $# -eq 0 ] || { echo "usage: godot-import" >&2; exit 2; }
+exec "$(dirname "$(realpath "$0")")/door-request" import

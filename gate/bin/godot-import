@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the .godot import cache for a fresh clone. Without it, class_name
 # lookups fail and every test errors before it starts.
-# Usage: godot-import [project_dir]
+# Usage: godot-import <project_dir>
 set -u
 here="$(dirname "$(realpath "$0")")"
-exec "$here/godot-headless" "${1:-$PWD}" --import
+exec "$here/godot-headless" "${1:?project dir required}" --import

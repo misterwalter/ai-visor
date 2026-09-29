@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 # Run the project's GUT suite headless, using its own .gutconfig.json.
 # Exit status is GUT's: 0 when every test passed.
-# Usage: gut-test [project_dir]
+# Usage: gut-test <project_dir> [--only NAME]
+#
+# --only NAME   run only the test files whose name contains NAME
 set -u
 here="$(dirname "$(realpath "$0")")"
-exec "$here/godot-headless" "${1:-$PWD}" -s res://addons/gut/gut_cmdln.gd -gexit
+proj="${1:?project dir required}"; shift
+select=()
+if [ $# -gt 0 ]; then
+  [ "$1" = "--only" ] || { echo "gut-test: unknown option: $1" >&2; exit 2; }
+  name="${2:?--only needs a test file name}"
+  # The name arrives from the agent. Letters, digits, dot, dash and underscore only.
+  [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "gut-test: not a test file name: $name" >&2; exit 2; }
+  select=(-gselect="$name")
+fi
+exec "$here/godot-headless" "$proj" -s res://addons/gut/gut_cmdln.gd -gexit "${select[@]}"

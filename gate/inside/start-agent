@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# First program inside the wall. Opens the inner end of the model door, so the
+# harness finds the model at its usual address, then becomes the given command.
+# Usage: start-agent <command> [args...]
+set -u
+socat TCP-LISTEN:11434,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/run/gate/model.sock &
+
+# True once something listens on port 11434, which the kernel's table writes in
+# hexadecimal as 2CAA, with state 0A for "listening". Looking is quieter than
+# knocking: a test connection would show up in the door's log as a failed request.
+listening() { awk '$2 ~ /:2CAA$/ && $4 == "0A" {found = 1} END {exit !found}' /proc/net/tcp; }
+
+for _ in $(seq 1 50); do
+  listening && exec "$@"
+  sleep 0.1
+done
+echo "start-agent: the model door did not open" >&2
+exit 1

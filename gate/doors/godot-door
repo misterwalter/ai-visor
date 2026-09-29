@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# The test door, outside end. Godot cannot start inside the wall, so the agent's
+# gut-test and godot-import send a one-line request here and get the output back.
+# Runs once per connection, with the connection as stdin and stdout.
+#
+# Usage: godot-door <project_dir> <lock file>
+#
+# Accepts exactly three requests:
+#   import            build the import cache
+#   test              run the whole suite
+#   test NAME         run the test files whose name contains NAME
+# The last line sent back is "GATE_EXIT <status>".
+set -u
+here="$(dirname "$(realpath "$0")")"
+proj="${1:?project dir required}"; lock="${2:?lock file required}"
+LIMIT="${VISOR_TEST_TIME:-15m}"
+
+refuse() {
+  echo "godot-door: REFUSED: $1" >&2
+  echo "the test door accepts only: import | test | test NAME"
+  echo "GATE_EXIT 2"
+  exit 0
+}
+
+IFS= read -r -t 10 request || refuse "no request arrived"
+case "$request" in
+  import)   cmd=("$here/../bin/godot-import" "$proj") ;;
+  test)     cmd=("$here/../bin/gut-test" "$proj") ;;
+  "test "*) name="${request#test }"
+            [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || refuse "bad test name"
+            cmd=("$here/../bin/gut-test" "$proj" --only "$name") ;;
+  *)        refuse "unknown request" ;;
+esac
+
+echo "godot-door: $request" >&2
+# One Godot at a time: each takes memory the model needs.
+flock "$lock" timeout --kill-after=10 "$LIMIT" "${cmd[@]}" 2>&1 < /dev/null
+echo "GATE_EXIT $?"

@@ -8,7 +8,10 @@
     }
   },
   "model": {
-    "name": "coder-abliterated"
+    "name": "coder-abliterated",
+    "chatCompression": {
+      "maxRecentFilesToRetain": 2
+    }
   },
   "modelProviders": {
     "openai": [
@@ -59,7 +62,9 @@
     "truncateToolOutputLines": 400
   },
   "context": {
-    "autoCompactThreshold": 0.8
+    "clearContextOnIdle": {
+      "toolResultsThresholdMinutes": -1
+    }
   },
   "memory": {
     "enableManagedAutoMemory": false,

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# One gate run: fresh clone -> branch -> baseline tests -> agent -> tests -> report.
+# One gate run: fresh clone -> branch -> baseline tests -> agent, inside the wall
+# -> tests -> report.
 #
 #   run_gate.sh <repo> <task.md> <model> [--plan-only] [--notes <file>]
 #
@@ -22,15 +23,31 @@ done
 
 HERE="$(dirname "$(realpath "$0")")"
 export PATH="$HERE/bin:$HOME/.npm-global/bin:$PATH"
+# The harness gives up on any single reply after 15 minutes unless told otherwise,
+# and on a CPU a long reply takes longer than that. No setting in its file covers this.
+export QWEN_STREAM_MAX_LIFETIME_MS=0
 NAME="$(basename "$TASK" .md)"
 RUN="$NAME-$MODEL-$(date +%Y%m%d-%H%M)"
 WORK="/srv/code/work/$RUN"
 OUT="/srv/code/gate-results/$RUN"
-mkdir -p "$OUT" /srv/code/work
+WALL="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/gate-$RUN"
+MODEL_SERVER="127.0.0.1:11434"
+mkdir -p "$OUT/api-log" /srv/code/work
 
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 
 say "run $RUN  (plan_only=$PLAN_ONLY)"
+
+for tool in bwrap socat python3 jq flock git flatpak qwen; do
+  command -v "$tool" > /dev/null || { say "missing program: $tool"; exit 1; }
+done
+# The test door hands these paths to socat, which splits its arguments on spaces and commas.
+for path in "$WORK" "$WALL"; do
+  [[ "$path" =~ ^[A-Za-z0-9_./-]+$ ]] \
+    || { say "only letters, digits, dot, dash and underscore may appear in: $path"; exit 1; }
+done
+# The system allows a socket's path 107 characters, and the doors' names take 11.
+[ "${#WALL}" -le 90 ] || { say "the task name is too long for a socket path: $WALL"; exit 1; }
 
 # The harness reads its settings from the home directory. A copy that has drifted
 # from the one in this repo would make runs incomparable, so refuse to start.
@@ -59,35 +76,67 @@ say "baseline tests"
 gut-test "$WORK" > "$OUT/tests-before.log" 2>&1; BEFORE=$?
 say "baseline exit=$BEFORE"
 
+# Standing instructions go in the system prompt, because the harness keeps that
+# whole when it summarises a long conversation. The first message does not
+# survive a summary, and an agent that has lost the test command invents one.
+if [ "$PLAN_ONLY" = 1 ]; then MODE="plan"; ACCESS="ro"; else MODE="yolo"; ACCESS="rw"; fi
 {
-  echo "You are working in the project at $WORK (Godot $GODOT_VER)."
+  cat "$HERE/system-prompt.md"
   echo
+  if [ "$PLAN_ONLY" = 1 ]; then cat "$HERE/system-prompt-plan.md"; else cat "$HERE/system-prompt-build.md"; fi
+  echo
+  echo "# This project"
+  echo "The repository is at $WORK (Godot $GODOT_VER)."
   if [ -n "$RULES" ]; then
-    echo "PROJECT RULES (from $(basename "$RULES"); follow them)"
-    cat "$RULES"
+    echo "Its own rules follow, from $(basename "$RULES"). Obey them."
     echo
+    cat "$RULES"
   fi
-  echo "TASK"
+} > "$OUT/system-prompt.txt"
+{
   cat "$TASK"
   if [ -n "$NOTES" ]; then
     echo; echo "EARLIER DISCUSSION WITH THE OWNER"; cat "$NOTES"
   fi
-  echo
-  echo "HOW TO WORK"
-  if [ "$PLAN_ONLY" = 1 ]; then
-    echo "- Do not edit any files in this round. Read the code, then reply with:"
-    echo "  your plan, the options you considered, and numbered questions for the owner."
-  else
-    echo "- Read the relevant code before changing it."
-    echo "- Run the test suite with the command: gut-test"
-    echo "  It takes a few minutes. Every test must pass before you finish."
-    echo "- Add or update tests for behaviour you change, where practical."
-    echo "- Do not commit or push. Do not touch anything outside this directory."
-    echo "- Finish with a short summary: what changed, which files, what you were unsure of."
-  fi
 } > "$OUT/prompt.txt"
 
-MODE="yolo"; [ "$PLAN_ONLY" = 1 ] && MODE="plan"
+# The two doors in the wall. Both are closed again as soon as the agent is done.
+mkdir -m 700 "$WALL" || { say "could not create $WALL"; exit 1; }
+python3 "$HERE/doors/model-door.py" "$WALL/model.sock" "$MODEL_SERVER" 2> "$OUT/model-door.log" &
+MODEL_DOOR=$!
+socat UNIX-LISTEN:"$WALL/godot.sock",fork EXEC:"$HERE/doors/godot-door $WORK $WALL/godot.lock" \
+  2> "$OUT/godot-door.log" &
+GODOT_DOOR=$!
+WATCHERS=""; DOORS_OPEN=1
+close_doors() {
+  [ "$DOORS_OPEN" = 1 ] || return 0
+  DOORS_OPEN=0
+  kill $MODEL_DOOR $GODOT_DOOR $WATCHERS 2>/dev/null
+  # A Godot the agent started through the test door must not outlive the run.
+  if flatpak ps --columns=application 2>/dev/null | grep -q org.godotengine.Godot; then
+    say "WARNING: Godot was still running after the agent; stopping it"
+    flatpak kill org.godotengine.Godot
+  fi
+  rm -rf "$WALL"
+}
+trap close_doors EXIT
+for _ in $(seq 1 50); do
+  [ -S "$WALL/model.sock" ] && [ -S "$WALL/godot.sock" ] && break
+  sleep 0.1
+done
+[ -S "$WALL/model.sock" ] && [ -S "$WALL/godot.sock" ] \
+  || { say "the doors did not open -- see $OUT/model-door.log and $OUT/godot-door.log"; exit 1; }
+
+# Nothing the agent must not see may be visible from inside, and both doors must
+# pass what they should and refuse the rest. Checked before every run.
+WALLED=("$HERE/wall.sh" "$WORK" "$WALL" "$OUT/api-log" "$ACCESS")
+"${WALLED[@]}" check-wall "$ACCESS" "$WORK" "$HOME/.ssh" "$REPO_SRC" "$TASK" "$OUT/run.log" "$HERE/run_gate.sh" \
+  < /dev/null > "$OUT/wall-check.log" 2>&1 \
+  || { say "WALL CHECK FAILED -- the agent was not started"; cat "$OUT/wall-check.log"; exit 1; }
+say "wall checked: $(grep -c '^ok' "$OUT/wall-check.log") checks passed"
+# The check knocks on both doors with requests they must refuse. Those are not the agent's.
+refusals() { cat "$OUT/model-door.log" "$OUT/godot-door.log" | grep -c REFUSED; }
+REFUSED_BY_CHECK="$(refusals)"
 
 # The only tools the agent may be offered, and the harness tools to switch off to
 # get there. A harness update can add tools; the guard below catches that.
@@ -104,10 +153,10 @@ T0=$(date +%s)
 # --safe-mode stops the harness acting on files in the project (it will start
 # whatever a project's .mcp.json names). With our own system prompt it also keeps
 # the harness's share of the context near 6,000 tokens instead of 20,000.
-qwen "$(cat "$OUT/prompt.txt")" \
+"${WALLED[@]}" qwen "$(cat "$OUT/prompt.txt")" \
   -m "$MODEL" --approval-mode "$MODE" --output-format json \
   --max-session-turns "${VISOR_MAX_TURNS:-150}" --max-wall-time "${VISOR_MAX_TIME:-6h}" \
-  --safe-mode --system-prompt "$(cat "$HERE/system-prompt.md")" \
+  --safe-mode --system-prompt "$(cat "$OUT/system-prompt.txt")" \
   --exclude-tools "$EXCLUDED" \
   --openai-logging --openai-logging-dir "$OUT/api-log" \
   < /dev/null > "$OUT/agent.json" 2> "$OUT/agent.err" &
@@ -123,19 +172,59 @@ QWEN=$!
         '[.request.tools[]?.function.name] - $ok | join(",")' "$first")"
       if [ -n "$extra" ]; then
         echo "$extra" > "$OUT/unexpected-tools.txt"
-        kill "$QWEN"; sleep 5; kill -9 "$QWEN" 2>/dev/null
+        kill "$QWEN"
       fi
       break
     fi
     sleep 10
   done
 ) &
+WATCHERS="$!"
+
+# Memory watch: one line a minute, so a run can be read afterwards as memory
+# against context size. A machine that swaps hard for three minutes running is
+# no longer doing useful work, and the run is stopped.
+SWAP_LIMIT="${VISOR_SWAP_LIMIT:-50}"   # MB per second, in and out together
+(
+  swapped() { awk -v kb="$(( $(getconf PAGESIZE) / 1024 ))" '/^pswp(in|out) /{n += $2} END{print n * kb}' /proc/vmstat; }
+  echo "time available_mb swap_used_mb swap_mb_per_s model_mb prompt_tokens" > "$OUT/memory.log"
+  last="$(swapped)"; strikes=0
+  while sleep 60 && kill -0 "$QWEN" 2>/dev/null; do
+    now="$(swapped)"; rate=$(( (now - last) / 1024 / 60 )); last="$now"
+    available="$(awk '/^MemAvailable/{print int($2 / 1024)}' /proc/meminfo)"
+    swap="$(awk '/^SwapTotal/{t = $2} /^SwapFree/{f = $2} END{print int((t - f) / 1024)}' /proc/meminfo)"
+    model="$(ps -eo rss=,comm= | awk '$2 ~ /^ollama/ && $1 > m {m = $1} END{print int(m / 1024)}')"
+    newest="$(ls -t "$OUT"/api-log/* 2>/dev/null | head -1)"
+    tokens="$([ -n "$newest" ] && jq -r '.response.usage.prompt_tokens // "-"' "$newest" 2>/dev/null)"
+    echo "$(date +%H:%M) $available $swap $rate $model ${tokens:--}" >> "$OUT/memory.log"
+    if [ "$rate" -ge "$SWAP_LIMIT" ]; then
+      strikes=$(( strikes + 1 ))
+      say "memory: swapping at $rate MB/s, $available MB available ($strikes of 3)"
+    else
+      strikes=0
+    fi
+    if [ "$strikes" -ge 3 ]; then
+      echo "swapping at $rate MB/s for three minutes running, $available MB available" > "$OUT/stopped-by-memory.txt"
+      kill "$QWEN"
+      break
+    fi
+  done
+) &
+WATCHERS="$WATCHERS $!"
+
 wait "$QWEN"; AGENT=$?
 T1=$(date +%s)
+close_doors
 say "agent exit=$AGENT after $(( (T1-T0)/60 )) min"
 [ "$AGENT" = 0 ] || say "AGENT FAILED -- see $OUT/agent.err"
 [ -f "$OUT/unexpected-tools.txt" ] \
   && say "STOPPED: the harness offered tools outside the allowed set: $(cat "$OUT/unexpected-tools.txt")"
+if [ -f "$OUT/stopped-by-memory.txt" ]; then
+  say "STOPPED: $(cat "$OUT/stopped-by-memory.txt")"
+  ollama stop "$MODEL" || say "WARNING: could not unload $MODEL"
+fi
+REFUSED=$(( $(refusals) - REFUSED_BY_CHECK ))
+[ "$REFUSED" = 0 ] || say "the doors refused $REFUSED requests from the agent -- see model-door.log and godot-door.log"
 
 AFTER="n/a"
 if [ "$PLAN_ONLY" = 0 ]; then
@@ -155,6 +244,8 @@ fi
     echo "**AGENT FAILED (exit $AGENT).** Anything below is what it left behind, not a finished result."
     [ -f "$OUT/unexpected-tools.txt" ] \
       && echo "Stopped by the tool guard. Unexpected tools: $(cat "$OUT/unexpected-tools.txt")"
+    [ -f "$OUT/stopped-by-memory.txt" ] \
+      && echo "Stopped by the memory watch: $(cat "$OUT/stopped-by-memory.txt")."
     echo '```'; tail -20 "$OUT/agent.err"; echo '```'
     echo
   fi
@@ -166,6 +257,10 @@ fi
   echo "- tests before: exit $BEFORE   tests after: exit $AFTER"
   echo "- model calls: $(ls "$OUT/api-log" 2>/dev/null | wc -l)   largest prompt: $(cat "$OUT"/api-log/* 2>/dev/null \
         | jq -s '[.[].response.usage.prompt_tokens // 0] | max // 0') tokens"
+  echo "- memory: least available $(awk 'NR > 1 && (m == "" || $2 < m) {m = $2} END{print m + 0}' "$OUT/memory.log") MB," \
+       "fastest swapping $(awk 'NR > 1 && $4 > m {m = $4} END{print m + 0}' "$OUT/memory.log") MB/s"
+  echo "- wall: $(grep -c '^ok' "$OUT/wall-check.log") checks passed before the agent started;" \
+       "the doors refused $REFUSED requests from the agent"
   echo "- branch: visor/$RUN   workspace: $WORK"
   echo
   echo "## Files changed"

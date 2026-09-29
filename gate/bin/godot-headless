@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Run the flatpak Godot headless against a project directory.
+# Run the flatpak Godot headless against a project directory, walled in.
 # Usage: godot-headless <project_dir> [godot args...]
+#
+# The project's scripts and tests are code the agent may have written, so Godot
+# gets the project directory and nothing else. As shipped, the Godot flatpak
+# grants itself the whole filesystem, the network and host commands; --sandbox
+# drops all of that.
 set -u
 proj="$(realpath "${1:?project dir required}")"; shift
-exec flatpak run --user --filesystem="$proj" org.godotengine.Godot --headless --path "$proj" "$@"
+exec flatpak run --user --sandbox --filesystem="$proj" org.godotengine.Godot --headless --path "$proj" "$@"
