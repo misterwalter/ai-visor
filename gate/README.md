@@ -21,8 +21,8 @@ agent, tests before and after, and a report.
 | `open_pr.sh` | Opens a pull request for that branch, when the project's home is on GitHub. |
 | `wall.sh` | Runs a command inside the sandbox. `run_gate.sh` starts the agent through it. |
 | `doors/model-door.py` | The one way from the sandbox to the model. Passes chat requests, refuses the rest, records every call. |
-| `doors/godot-door` | The one way from the sandbox to Godot. Accepts three requests. |
-| `inside/` | The programs the agent finds inside the sandbox: `gut-test`, `godot-import`, and the self-check. |
+| `doors/godot-door` | The one way from the sandbox to Godot. Accepts four requests. |
+| `inside/` | The programs the agent finds inside the sandbox: `gut-test`, `godot-check`, `godot-import`, and the self-check. |
 | `system-prompt.md` | The agent's standing instructions, kept short on purpose. |
 | `system-prompt-build.md`, `system-prompt-plan.md` | What is added for a build round or a plan-only round. |
 | `harness/qwen.sh`, `harness/pi.sh` | How each agent loop is started, and the tools it may offer. |
@@ -32,6 +32,8 @@ agent, tests before and after, and a report.
 | `bin/godot-headless` | Runs the flatpak Godot with no window against a project folder, walled in. |
 | `bin/godot-import` | Builds the `.godot` import cache a fresh clone lacks. |
 | `bin/gut-test` | Runs the project's GUT suite headless, or the test files matching a name. |
+| `bin/godot-check` | Compiles one script inside the running project and reports its errors. |
+| `godot/check_script.gd` | The script Godot runs to do that. |
 | `systemd/godot-update.*` | Nightly timer that updates the flatpak Godot. |
 
 Task files are not kept in this repo. `gate/tasks/` is git-ignored; write tasks
@@ -113,6 +115,17 @@ fails its self-check.
 
 - The first runs the whole suite. The exit status is 0 when every test passed.
 - `--only NAME` runs only the test files whose name contains `NAME`.
+
+```bash
+./gate/bin/godot-check /path/to/project scripts/player.gd
+```
+
+- Compiles that one script and prints any errors with file and line. The exit
+  status is 0 when it compiled.
+- Godot has a `--check-only` option of its own, and it is not used here. It
+  parses before the project's autoloads exist, so it fails a good script that
+  names one, and it can exit 0 on a script that did not compile. This command
+  loads the script inside the running project instead.
 
 ## Where results go
 
@@ -205,8 +218,8 @@ needs to reach the model, so the wall has two narrow openings:
   models, and a pull is an outbound request to an address of the caller's
   choosing. The door records every call in `model-calls.jsonl`, outside the
   wall, so the count of calls and tokens does not rest on the agent's honesty.
-- **The test door** accepts `import`, `test` and `test NAME`. It runs one Godot
-  at a time, inside wall 2, and sends back the output.
+- **The test door** accepts `import`, `test`, `test NAME` and `check SCRIPT`. It
+  runs one Godot at a time, inside wall 2, and sends back the output.
 
 **The self-check.** Before every run, `inside/check-wall` is run inside the
 wall. It confirms that the paths which must be hidden are hidden, that `.git`,

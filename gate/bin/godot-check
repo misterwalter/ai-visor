@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Check one GDScript file for errors, inside the running project.
+# Exit status 0 means it compiled.
+# Usage: godot-check <project_dir> <script>
+#
+# <script> may be given as res://scripts/x.gd, as scripts/x.gd, or as the full
+# path of a file inside the project.
+set -u
+here="$(dirname "$(realpath "$0")")"
+proj="$(realpath "${1:?project dir required}")"; script="${2:?script required}"
+[ $# -eq 2 ] || { echo "usage: godot-check <project_dir> <script>" >&2; exit 2; }
+
+# The path arrives from the agent. Reduce it to one relative to the project, then
+# accept only a plain path to a .gd file that stays inside.
+script="${script#res://}"; script="${script#"$proj"/}"
+[[ "$script" =~ ^[A-Za-z0-9_./-]+\.gd$ ]] && [[ "$script" != /* ]] && [[ "/$script/" != *"/../"* ]] \
+  || { echo "godot-check: not a script inside the project: $2" >&2; exit 2; }
+
+checker="$(realpath "$here/../godot/check_script.gd")"
+output="$(flatpak run --user --sandbox --filesystem="$proj" --filesystem="$checker:ro" \
+  org.godotengine.Godot --headless --path "$proj" -s "$checker" -- "res://$script" 2>&1)"
+status=$?
+# Drop the lines that point into the checker itself, and say each thing once: a
+# broken script is compiled twice on the way to the verdict.
+output="$(grep -av -e 'GDScript backtrace' -e 'check_script\.gd' <<< "$output" | awk '!seen[$0]++')"
+printf '%s\n' "$output"
+# The verdict must be there in words as well as in the exit status. If Godot
+# died before giving one, that is a failure, whatever it exited with.
+if ! grep -qaE '^CHECK (PASSED|FAILED): ' <<< "$output"; then
+  echo "godot-check: FAILED: Godot gave no verdict"
+  exit 1
+fi
+if [ "$status" = 0 ] && ! grep -qaE '^CHECK PASSED: ' <<< "$output"; then
+  echo "godot-check: FAILED: exit status 0 without a pass"
+  exit 1
+fi
+exit "$status"

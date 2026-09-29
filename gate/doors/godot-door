@@ -5,10 +5,11 @@
 #
 # Usage: godot-door <project_dir> <lock file>
 #
-# Accepts exactly three requests:
+# Accepts exactly four requests:
 #   import            build the import cache
 #   test              run the whole suite
 #   test NAME         run the test files whose name contains NAME
+#   check SCRIPT      compile one script and report its errors
 # The last line sent back is "GATE_EXIT <status>".
 set -u
 here="$(dirname "$(realpath "$0")")"
@@ -17,7 +18,7 @@ LIMIT="${VISOR_TEST_TIME:-15m}"
 
 refuse() {
   echo "godot-door: REFUSED: $1" >&2
-  echo "the test door accepts only: import | test | test NAME"
+  echo "the test door accepts only: import | test | test NAME | check SCRIPT"
   echo "GATE_EXIT 2"
   exit 0
 }
@@ -29,6 +30,10 @@ case "$request" in
   "test "*) name="${request#test }"
             [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || refuse "bad test name"
             cmd=("$here/../bin/gut-test" "$proj" --only "$name") ;;
+  "check "*) script="${request#check }"
+            # godot-check decides whether this is a script inside the project.
+            [[ "$script" =~ ^[A-Za-z0-9_./:-]+$ ]] || refuse "bad script path"
+            cmd=("$here/../bin/godot-check" "$proj" "$script") ;;
   *)        refuse "unknown request" ;;
 esac
 
