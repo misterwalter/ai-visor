@@ -30,6 +30,7 @@ repo="${repo%.git}"
 command -v gh > /dev/null || { echo "open_pr: the gh program is not installed" >&2; exit 1; }
 # Tasks start from main, so that is what the work is compared against. Opening a
 # pull request changes nothing on main; merging it is the owner's act.
-# gh refuses to run outside a git folder, even when told which repo it is for.
-cd "$WORK" || exit 1
+# gh refuses to run outside a git folder whose remote is on GitHub, even when told
+# which repo it is for. The source clone is such a folder; a workspace is not.
+cd "$SRC" || exit 1
 gh pr create --repo "$repo" --head "$branch" --base main --title "$TITLE" --body-file "$BODY"
