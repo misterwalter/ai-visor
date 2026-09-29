@@ -104,7 +104,9 @@ if [ "$PLAN_ONLY" = 1 ]; then MODE="plan"; ACCESS="ro"; else MODE="yolo"; ACCESS
 mkdir -m 700 "$WALL" || { say "could not create $WALL"; exit 1; }
 python3 "$HERE/doors/model-door.py" "$WALL/model.sock" "$MODEL_SERVER" 2> "$OUT/model-door.log" &
 MODEL_DOOR=$!
-socat UNIX-LISTEN:"$WALL/godot.sock",fork EXEC:"$HERE/doors/godot-door $WORK $WALL/godot.lock" \
+# -t is how long socat keeps a connection open for the answer once the request
+# has arrived. Its default is half a second, and a test run takes longer.
+socat -t 3600 UNIX-LISTEN:"$WALL/godot.sock",fork EXEC:"$HERE/doors/godot-door $WORK $WALL/godot.lock" \
   2> "$OUT/godot-door.log" &
 GODOT_DOOR=$!
 WATCHERS=""; DOORS_OPEN=1
