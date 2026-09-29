@@ -118,6 +118,7 @@ if [ "$PLAN_ONLY" = 1 ]; then ROUND="plan"; ACCESS="ro"; else ROUND="build"; ACC
 
 # The two doors in the wall. Both are closed again as soon as the agent is done.
 mkdir -m 700 "$WALL" || { say "could not create $WALL"; exit 1; }
+echo "$GODOT_VER" > "$WALL/godot-version"   # read by inside/godot
 python3 "$HERE/doors/model-door.py" "$WALL/model.sock" "$MODEL_SERVER" "$MODEL" "$CALLS" \
   2> "$OUT/model-door.log" &
 MODEL_DOOR=$!

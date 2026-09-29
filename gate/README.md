@@ -22,7 +22,7 @@ agent, tests before and after, and a report.
 | `wall.sh` | Runs a command inside the sandbox. `run_gate.sh` starts the agent through it. |
 | `doors/model-door.py` | The one way from the sandbox to the model. Passes chat requests, refuses the rest, records every call. |
 | `doors/godot-door` | The one way from the sandbox to Godot. Accepts four requests. |
-| `inside/` | The programs the agent finds inside the sandbox: `gut-test`, `godot-check`, `godot-import`, and the self-check. |
+| `inside/` | The programs the agent finds inside the sandbox: `gut-test`, `godot-check`, `godot-import`, the self-check, and a `godot` that explains what to use in its place. |
 | `system-prompt.md` | The agent's standing instructions, kept short on purpose. |
 | `system-prompt-build.md`, `system-prompt-plan.md` | What is added for a build round or a plan-only round. |
 | `harness/qwen.sh`, `harness/pi.sh` | How each agent loop is started, and the tools it may offer. |
