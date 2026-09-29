@@ -180,7 +180,7 @@ the harness spends on itself is paid for in minutes, on every run.
 | First request | Tokens | Wait before work starts |
 |---|---|---|
 | Harness defaults | 19,870 | about 11 minutes |
-| This setup | about 6,500 | under 3 minutes |
+| This setup, a project's rules included | about 8,200 | 3 to 5 minutes |
 
 With the defaults and a 32K context, the agent ran out of room after reading
 three files, and the first run failed for that reason.

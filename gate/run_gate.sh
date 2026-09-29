@@ -195,7 +195,9 @@ SWAP_LIMIT="${VISOR_SWAP_LIMIT:-50}"   # MB per second, in and out together
     now="$(swapped)"; rate=$(( (now - last) / 1024 / 60 )); last="$now"
     available="$(awk '/^MemAvailable/{print int($2 / 1024)}' /proc/meminfo)"
     swap="$(awk '/^SwapTotal/{t = $2} /^SwapFree/{f = $2} END{print int((t - f) / 1024)}' /proc/meminfo)"
-    model="$(ps -eo rss=,comm= | awk '$2 ~ /^ollama/ && $1 > m {m = $1} END{print int(m / 1024)}')"
+    # The model is held by a runner the model server starts, under a name of its own.
+    # Both have "ollama" in their command line; the largest of them holds the model.
+    model="$(ps -eo rss=,args= | awk '/ollama/ && $1 > m {m = $1} END{print int(m / 1024)}')"
     newest="$(ls -t "$OUT"/api-log/* 2>/dev/null | head -1)"
     tokens="$([ -n "$newest" ] && jq -r '.response.usage.prompt_tokens // "-"' "$newest" 2>/dev/null)"
     echo "$(date +%H:%M) $available $swap $rate $model ${tokens:--}" >> "$OUT/memory.log"
