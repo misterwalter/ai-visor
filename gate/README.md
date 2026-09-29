@@ -32,7 +32,7 @@ agent, tests before and after, and a report.
 | `bin/godot-headless` | Runs the flatpak Godot with no window against a project folder, walled in. |
 | `bin/godot-import` | Builds the `.godot` import cache a fresh clone lacks. |
 | `bin/gut-test` | Runs the project's GUT suite headless, or the test files matching a name. |
-| `bin/godot-check` | Compiles one script inside the running project and reports its errors. |
+| `bin/godot-check` | Compiles one script or shader inside the running project and reports its errors. |
 | `godot/check_script.gd` | The script Godot runs to do that. |
 | `systemd/godot-update.*` | Nightly timer that updates the flatpak Godot. |
 
@@ -121,7 +121,8 @@ fails its self-check.
 ```
 
 - Compiles that one script and prints any errors with file and line. The exit
-  status is 0 when it compiled.
+  status is 0 when it compiled. A `.gdshader` file is checked the same way;
+  Godot compiles shaders even with no display.
 - Godot has a `--check-only` option of its own, and it is not used here. It
   parses before the project's autoloads exist, so it fails a good script that
   names one, and it can exit 0 on a script that did not compile. This command
@@ -219,7 +220,7 @@ needs to reach the model, so the wall has two narrow openings:
   models, and a pull is an outbound request to an address of the caller's
   choosing. The door records every call in `model-calls.jsonl`, outside the
   wall, so the count of calls and tokens does not rest on the agent's honesty.
-- **The test door** accepts `import`, `test`, `test NAME` and `check SCRIPT`. It
+- **The test door** accepts `import`, `test`, `test NAME` and `check FILE`. It
   runs one Godot at a time, inside wall 2, and sends back the output.
 
 **The self-check.** Before every run, `inside/check-wall` is run inside the

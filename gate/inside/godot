@@ -3,7 +3,7 @@
 # Without it, "command not found" sends an agent searching the machine.
 echo "Godot cannot be started directly here. This project runs on Godot $(cat /run/gate/godot-version 2>/dev/null || echo 4)."
 echo "Use one of these instead. They take no other options."
-echo "  godot-check FILE        compile one script and print its errors"
+echo "  godot-check FILE        compile one script or shader and print its errors"
 echo "  gut-test --only NAME    run the test files whose name contains NAME"
 echo "  gut-test                run the whole test suite"
 echo "  godot-import            rebuild the import cache"

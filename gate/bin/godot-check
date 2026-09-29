@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Check one GDScript file for errors, inside the running project.
-# Exit status 0 means it compiled.
-# Usage: godot-check <project_dir> <script>
+# Check one script (.gd) or shader (.gdshader) for errors, inside the running
+# project. Exit status 0 means it compiled.
+# Usage: godot-check <project_dir> <file>
 #
-# <script> may be given as res://scripts/x.gd, as scripts/x.gd, or as the full
+# <file> may be given as res://scripts/x.gd, as scripts/x.gd, or as the full
 # path of a file inside the project.
 set -u
 here="$(dirname "$(realpath "$0")")"
 proj="$(realpath "${1:?project dir required}")"; script="${2:?script required}"
-[ $# -eq 2 ] || { echo "usage: godot-check <project_dir> <script>" >&2; exit 2; }
+[ $# -eq 2 ] || { echo "usage: godot-check <project_dir> <file>" >&2; exit 2; }
 
 # The path arrives from the agent. Reduce it to one relative to the project, then
 # accept only a plain path to a .gd file that stays inside.
 script="${script#res://}"; script="${script#"$proj"/}"
-[[ "$script" =~ ^[A-Za-z0-9_./-]+\.gd$ ]] && [[ "$script" != /* ]] && [[ "/$script/" != *"/../"* ]] \
-  || { echo "godot-check: not a script inside the project: $2" >&2; exit 2; }
+[[ "$script" =~ ^[A-Za-z0-9_./-]+\.(gd|gdshader)$ ]] && [[ "$script" != /* ]] && [[ "/$script/" != *"/../"* ]] \
+  || { echo "godot-check: not a script or shader inside the project: $2" >&2; exit 2; }
 
 checker="$(realpath "$here/../godot/check_script.gd")"
 output="$(flatpak run --user --sandbox --filesystem="$proj" --filesystem="$checker:ro" \
@@ -23,6 +23,17 @@ status=$?
 # Drop the lines that point into the checker itself, and say each thing once: a
 # broken script is compiled twice on the way to the verdict.
 output="$(grep -av -e 'GDScript backtrace' -e 'check_script\.gd' <<< "$output" | awk '!seen[$0]++')"
+# A shader's verdict is read from what the engine printed while compiling it.
+if grep -qaE '^CHECK COMPILED: ' <<< "$output"; then
+  if grep -qaE 'SHADER ERROR|Shader compilation failed' <<< "$output"; then
+    output="$(grep -av '^CHECK COMPILED: ' <<< "$output")
+CHECK FAILED: res://$script did not compile. The errors are above."
+    status=1
+  else
+    output="$(grep -av '^CHECK COMPILED: ' <<< "$output")
+CHECK PASSED: res://$script compiles."
+  fi
+fi
 printf '%s\n' "$output"
 # The verdict must be there in words as well as in the exit status. If Godot
 # died before giving one, that is a failure, whatever it exited with.

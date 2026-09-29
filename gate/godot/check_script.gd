@@ -1,15 +1,20 @@
 extends SceneTree
 ## Loads one script the way the running project would, autoloads and all, and says
-## whether it compiled.
+## whether it compiled. Hands one shader to the shader compiler.
 ##
 ## Godot's own --check-only is no use for this: it parses before the project's
 ## autoloads exist, so it fails a good script that names one and can exit 0 on a
 ## script that did not compile.
 ##
-##   godot --headless --path <project> -s <this file> -- res://path/to/script.gd
+##   godot --headless --path <project> -s <this file> -- res://path/to/file
 ##
 ## Exit status: 0 compiled, 1 did not, 2 called wrongly. The engine prints the
 ## errors themselves, with file and line, above the verdict.
+##
+## A shader is different. The engine compiles it, prints any errors, and offers
+## no way to ask afterwards whether it worked. So for a shader this prints
+## CHECK COMPILED and leaves the verdict to bin/godot-check, which reads what
+## the engine printed.
 
 
 func _initialize() -> void:
@@ -22,6 +27,12 @@ func _initialize() -> void:
 	if not FileAccess.file_exists(path):
 		print("CHECK FAILED: no such file: %s" % path)
 		quit(1)
+		return
+	if path.ends_with(".gdshader"):
+		var shader := Shader.new()
+		shader.code = FileAccess.get_file_as_string(path)
+		print("CHECK COMPILED: %s" % path)
+		quit(0)
 		return
 	# Read from disk, never from a cache: the file has usually just been edited.
 	var script := ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE) as Script
