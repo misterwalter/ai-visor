@@ -3,4 +3,7 @@ Description=Update the flatpak Godot to the latest release
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/flatpak update --user -y --noninteractive org.godotengine.Godot
+# Waits while visor holds the run lock: an engine that changes during a run can
+# rewrite project files on import, and splits one run across two versions.
+ExecStartPre=/usr/bin/mkdir -p %h/.local/state/visor
+ExecStart=/usr/bin/flock %h/.local/state/visor/run.lock /usr/bin/flatpak update --user -y --noninteractive org.godotengine.Godot

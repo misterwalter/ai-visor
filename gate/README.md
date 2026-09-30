@@ -15,6 +15,9 @@ agent, tests before and after, and a report.
 | File | What it does |
 |---|---|
 | `install.sh` | Registers the models and the timer. Run it after every `git pull`. |
+| `dispatch.py` | The dispatcher: takes task notes, runs them, replies in them. Runs as a service. |
+| `test_dispatch.py` | Its tests: `python3 gate/test_dispatch.py`. No model or Godot needed. |
+| `visor.conf.example` | The dispatcher's settings, to copy to `~/.config/visor/visor.conf`. |
 | `run_gate.sh` | One run: fresh clone, new branch, baseline tests, agent, tests again, report. |
 | `watch_run.sh` | Prints one status line a minute until a run finishes. |
 | `push_result.sh` | Pushes a run's result branch to the project's home. Refuses anything but a `visor/` branch. |
@@ -35,7 +38,8 @@ agent, tests before and after, and a report.
 | `bin/gut-test` | Runs the project's GUT suite headless, or the test files matching a name. |
 | `bin/godot-check` | Compiles one script or shader inside the running project and reports its errors. |
 | `godot/check_script.gd` | The script Godot runs to do that. |
-| `systemd/godot-update.*` | Nightly timer that updates the flatpak Godot. |
+| `systemd/godot-update.*` | Nightly timer that updates the flatpak Godot, never during a run. |
+| `systemd/visor-dispatch.service` | Keeps the dispatcher running. |
 
 Task files are not kept in this repo. `gate/tasks/` is git-ignored; write tasks
 wherever you keep your notes and pass the path.
@@ -76,7 +80,53 @@ The sandbox needs `bwrap` (bubblewrap) and `socat`. Flatpak depends on the
 first, and most systems ship the second. `run_gate.sh` names any program it
 cannot find and stops.
 
-## Running one task
+## The dispatcher
+
+The dispatcher turns notes in a shared notes folder into runs, and puts each
+run's answer back in the note. The folder a note is in says whose turn it is:
+
+| Folder | Meaning |
+|---|---|
+| `inbox/` | A new task. The dispatcher takes it. |
+| `approved/` | You have replied. The dispatcher takes it, before anything in `inbox/`. |
+| `working/` | A run is in progress. Leave the note alone. |
+| `your-turn/` | The dispatcher has answered and is waiting for you. |
+| `done/` | You have finished with it. |
+
+The first lines of a note say what to do:
+
+| Line | Meaning | If left out |
+|---|---|---|
+| `Project: <name>` | Which project, by its name in the settings. | The note comes back with an error. |
+| `Analysis:` / `Plan:` / `Build:` | The round: answer a question, propose a plan, or make the change. | `Plan:` |
+| `Model: official` / `abliterated` / `both` | Which model. `both` runs each in turn. | The setting `default_model`. |
+
+A note replied to and moved to `approved/` gets a build round, or another
+analysis round if it was a question. The whole discussion goes with it, and a
+further build carries on from that model's earlier branch.
+
+The dispatcher keeps a `sample-job.md` template in the notes folder, and puts
+it back if it goes missing. It rewrites `STATUS.md` there when something changes.
+
+```bash
+cp gate/visor.conf.example ~/.config/visor/visor.conf    # then edit it
+./gate/install.sh                                        # enables the service
+python3 gate/dispatch.py status                          # queue, running, recent
+python3 gate/dispatch.py once --dry-run                  # what it would do next
+journalctl --user -u visor-dispatch -f                   # its log, live
+```
+
+- `cp` puts the example settings where the dispatcher looks. They name your
+  projects, so they live on the server, not in this repository.
+- `install.sh` enables and starts the service once the settings exist.
+- `status` and `once --dry-run` only read. `journalctl -f` follows the log
+  until Ctrl-C; the same log is kept in `~/.local/state/visor/dispatch.log`.
+
+Only one run happens at a time. The dispatcher waits while any other run is in
+progress, including one started by hand. With `self_update = yes` it pulls this
+repository while idle, reinstalls, and restarts itself.
+
+## Running one task by hand
 
 ```bash
 nohup ./gate/run_gate.sh /path/to/project /path/to/task.md coder-abliterated qwen > ~/gate.log 2>&1 & disown

@@ -1,0 +1,12 @@
+[Unit]
+Description=Visor: turn task notes into gate runs, and gate runs into replies
+
+[Service]
+# install.sh writes the real path in place of @GATE@.
+ExecStart=/usr/bin/python3 @GATE@/dispatch.py serve
+Environment=PATH=%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=default.target

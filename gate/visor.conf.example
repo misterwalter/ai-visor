@@ -1,0 +1,29 @@
+# Settings for the dispatcher (dispatch.py). Copy to ~/.config/visor/visor.conf
+# and fill in. This copy is an example: the real one names your projects, so it
+# stays on the server and out of this repository.
+
+[visor]
+# The shared notes folder, holding inbox/, approved/, working/, your-turn/ and done/.
+tasks = /srv/notes/tasks
+# The agent loop: pi or qwen.
+harness = pi
+# The model used when a note has no Model: line: official, abliterated or both.
+default_model = both
+# Pull this repository while idle, reinstall, and restart when it changed.
+self_update = yes
+
+# Ollama's names for the two builds. These are the defaults.
+[models]
+official = coder-official
+abliterated = coder-abliterated
+
+# One section per project. source is a local clone of it; each run copies it
+# afresh. A Godot project (one with a project.godot) is tested with GUT and needs
+# nothing more. Any other project needs the command that runs its tests, from
+# the top of the repository, before visor will build on it.
+[project my-godot-game]
+source = /srv/code/my-godot-game
+
+[project my-python-tool]
+source = /srv/code/my-python-tool
+tests = python3 tests.py
