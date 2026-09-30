@@ -219,11 +219,18 @@ if [ "$ROUND" = build ]; then
   say "baseline exit=$BEFORE"
 fi
 
-# A model that has just been told to unload takes a while to give its memory
-# back. A new load meanwhile puts two copies on a machine that holds one, and
-# the swap fills in a minute. Wait for the old runner to be gone first.
+# This machine holds one model at a time. Another model still loaded, from the
+# last run, would be joined by this one: swap fills in a minute and the model
+# server is killed. So unload any other model, then wait for its runner to be
+# gone, since unloading returns before the memory is given back.
+for other in $(ollama ps 2>/dev/null | awk 'NR > 1 {print $1}'); do
+  [ "${other%:latest}" = "${MODEL%:latest}" ] && continue
+  say "unloading $other, which is still loaded"
+  ollama stop "$other" || say "WARNING: could not unload $other"
+done
 for _ in $(seq 1 60); do
-  if [ -z "$(ollama ps 2>/dev/null | awk 'NR > 1')" ] && pgrep -u ollama -x llama-server > /dev/null; then
+  loaded="$(ollama ps 2>/dev/null | awk 'NR > 1 {print $1}' | grep -v "^${MODEL%:latest}\(:latest\)\?$")"
+  if [ -n "$loaded" ] || { [ -z "$(ollama ps 2>/dev/null | awk 'NR > 1')" ] && pgrep -u ollama -x llama-server > /dev/null; }; then
     say "waiting for the previous model to unload"; sleep 5
   else
     break
@@ -341,6 +348,12 @@ WATCHERS="$WATCHERS $!"
 wait "$AGENT_PID"; AGENT=$?
 T1=$(date +%s)
 say "agent exit=$AGENT after $(( (T1-T0)/60 )) min"
+# A harness can exit cleanly without the model ever answering, when the model
+# server fails under it. That is a failure, however the harness exited.
+if [ "$(answered | wc -l)" = 0 ] && [ "$AGENT" = 0 ]; then
+  AGENT=1
+  echo "the model never answered a single request" > "$OUT/no-answer.txt"
+fi
 PAUSED=""
 [ -f "$OUT/paused.txt" ] && PAUSED="$(cat "$OUT/paused.txt")"
 [ -f "$OUT/stopped-by-memory.txt" ] && PAUSED="the machine was short of memory: $(cat "$OUT/stopped-by-memory.txt")"
@@ -406,6 +419,8 @@ fi
       && echo "Stopped by the memory watch: $(cat "$OUT/stopped-by-memory.txt")."
     [ -f "$OUT/stopped-as-stuck.txt" ] \
       && echo "Stopped as stuck: $(cat "$OUT/stopped-as-stuck.txt")."
+    [ -f "$OUT/no-answer.txt" ] \
+      && echo "Stopped because $(cat "$OUT/no-answer.txt"). See model-door.log."
     echo '```'; tail -20 "$OUT/agent.err"; echo '```'
     echo
   fi
