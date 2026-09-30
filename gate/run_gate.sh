@@ -187,9 +187,11 @@ WATCHERS="$!"
 # Guard: an agent that is stuck repeats itself. One made the same call 1,203
 # times over six hours. The model door counts how often in a row the agent has
 # made the very same tool call; past the limit, the run ends. The cap on calls
-# is the backstop for a loop that varies.
+# is the backstop for a loop that varies, and the time limit the backstop for
+# that. Neither is meant to end a run that is getting somewhere: the owner
+# would rather wait a day for a good result.
 MAX_REPEATS="${VISOR_MAX_REPEATS:-8}"
-MAX_CALLS="${VISOR_MAX_CALLS:-300}"
+MAX_CALLS="${VISOR_MAX_CALLS:-1000}"
 (
   while sleep 20 && kill -0 "$AGENT_PID" 2>/dev/null; do
     repeats="$(tail -1 "$CALLS" | jq -r '.repeats // 0')"

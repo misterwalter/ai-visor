@@ -99,8 +99,9 @@ Environment variables:
 
 - `VISOR_MAX_REPEATS` how many times in a row the agent may make the very same
   tool call before the run is stopped as stuck (default 8).
-- `VISOR_MAX_CALLS` cap on calls to the model in one run (default 300).
-- `VISOR_MAX_TIME` cap on wall-clock time (default `6h`).
+- `VISOR_MAX_CALLS` cap on calls to the model in one run (default 1000).
+- `VISOR_MAX_TIME` cap on wall-clock time (default `24h`). A backstop: the guards
+  below end a run that is stuck long before this does.
 - `VISOR_TEST_TIME` cap on one test run the agent asks for (default `15m`).
 - `VISOR_SWAP_LIMIT` swapping, in MB per second, that stops a run when it lasts
   three minutes (default 50).

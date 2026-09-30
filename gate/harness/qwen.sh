@@ -25,7 +25,7 @@ harness_command() {
   # the harness's share of the context small.
   COMMAND=(qwen "$(cat "$OUT/prompt.txt")"
     -m "$MODEL" --approval-mode "$approval" --output-format json
-    --max-wall-time "${VISOR_MAX_TIME:-6h}"
+    --max-wall-time "${VISOR_MAX_TIME:-24h}"
     --safe-mode --system-prompt "$(cat "$OUT/system-prompt.txt")"
     --exclude-tools "$excluded"
     --openai-logging --openai-logging-dir "$OUT/harness-log")

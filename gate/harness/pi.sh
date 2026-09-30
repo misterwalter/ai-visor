@@ -21,7 +21,7 @@ harness_command() {
   # Everything pi would otherwise discover for itself is switched off: extensions,
   # skills, prompt templates, themes, the project's own instruction files (they are
   # already in the system prompt) and anything in the project's .pi folder.
-  COMMAND=(timeout --kill-after=30 "${VISOR_MAX_TIME:-6h}"
+  COMMAND=(timeout --kill-after=30 "${VISOR_MAX_TIME:-24h}"
     pi --mode json --provider ollama --model "$MODEL" --thinking off
     --system-prompt "$(cat "$OUT/system-prompt.txt")"
     --tools "$(jq -r 'join(",")' <<< "$HARNESS_TOOLS")"
