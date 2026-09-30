@@ -214,6 +214,17 @@ if [ "$ROUND" = build ]; then
   say "baseline exit=$BEFORE"
 fi
 
+# A model that has just been told to unload takes a while to give its memory
+# back. A new load meanwhile puts two copies on a machine that holds one, and
+# the swap fills in a minute. Wait for the old runner to be gone first.
+for _ in $(seq 1 60); do
+  if [ -z "$(ollama ps 2>/dev/null | awk 'NR > 1')" ] && pgrep -u ollama -x llama-server > /dev/null; then
+    say "waiting for the previous model to unload"; sleep 5
+  else
+    break
+  fi
+done
+
 say "agent start ($HARNESS, $ROUND round)"
 T0=$(date +%s)
 harness_command
