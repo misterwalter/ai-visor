@@ -1,16 +1,17 @@
 # pi as the agent loop. Sourced by run_gate.sh, which has set
-# MODEL, PLAN_ONLY and OUT.
+# MODEL, ROUND and OUT.
 #
 # Settings: pi/settings.json and pi/models.json, which the wall puts where the
 # harness looks. pi has no limit on time of its own, so it runs under `timeout`.
 
 # The only tools the agent may be offered. run_gate.sh checks the first request
-# against this list. pi has no plan mode: a plan-only round gets tools that
-# cannot change anything.
-if [ "$PLAN_ONLY" = 1 ]; then
-  HARNESS_TOOLS='["find","grep","ls","read"]'
-else
+# against this list. pi has no plan mode: a round that changes nothing gets
+# tools that cannot change anything, plus the shell, which the wall keeps
+# read-only in those rounds, so that the agent can run the tests.
+if [ "$ROUND" = build ]; then
   HARNESS_TOOLS='["bash","edit","find","grep","read","write"]'
+else
+  HARNESS_TOOLS='["bash","find","grep","ls","read"]'
 fi
 
 # What the harness writes to stdout: a stream of events, one JSON object per line.

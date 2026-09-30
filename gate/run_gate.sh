@@ -2,21 +2,28 @@
 # One gate run: fresh clone -> branch -> baseline tests -> agent, inside the wall
 # -> tests -> report.
 #
-#   run_gate.sh <repo> <task.md> <model> <harness> [--plan-only] [--notes <file>]
+#   run_gate.sh <repo> <task.md> <model> <harness> [options]
 #
 # <repo>        a local clone of the project to work on; each run copies it afresh
 # <harness>     the agent loop to use: qwen or pi (see harness/)
 # --plan-only   the agent may read but not edit; its plan and questions are the output
-# --notes FILE  the owner's replies from an earlier plan round, appended to the prompt
+# --analysis    the agent may read but not edit; its answer to the task is the output
+# --notes FILE  the owner's replies from an earlier round, appended to the prompt
+# --continue RUN  start from the branch an earlier run left, instead of from main
+# --tests CMD   how to run the project's tests, for a project that is not Godot.
+#               A Godot project (one with project.godot) uses gate/bin/gut-test.
 set -u
 
 REPO_SRC="$(realpath "${1:?repo required}")"; TASK="$(realpath "${2:?task file required}")"
 MODEL="${3:?model required}"; HARNESS="${4:?harness required: qwen or pi}"; shift 4
-PLAN_ONLY=0; NOTES=""
+ROUND="build"; NOTES=""; CONTINUE=""; TESTS=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --plan-only) PLAN_ONLY=1 ;;
+    --plan-only) ROUND="plan" ;;
+    --analysis) ROUND="analysis" ;;
     --notes) NOTES="$(realpath "$2")"; shift ;;
+    --continue) CONTINUE="$2"; shift ;;
+    --tests) TESTS="$2"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -42,12 +49,12 @@ mkdir -p "$OUT/harness-log" /srv/code/work
 
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 
-say "run $RUN  (plan_only=$PLAN_ONLY)"
+say "run $RUN  ($ROUND round)"
 
 # shellcheck source=/dev/null
 . "$HERE/harness/$HARNESS.sh"
 
-for tool in bwrap socat python3 jq flock git flatpak "$HARNESS"; do
+for tool in bwrap socat python3 jq flock git "$HARNESS"; do
   command -v "$tool" > /dev/null || { say "missing program: $tool"; exit 1; }
 done
 # The test door hands these paths to socat, which splits its arguments on spaces and commas.
@@ -61,9 +68,18 @@ done
 git -C "$REPO_SRC" pull --quiet --ff-only origin main || say "WARNING: could not update $REPO_SRC"
 git clone --quiet "$REPO_SRC" "$WORK" || { say "clone failed"; exit 1; }
 cd "$WORK" || exit 1
-# Tasks always start from main. No fallback: branching from anything else would
-# produce a plausible-looking result built on the wrong code.
-git checkout --quiet -b "visor/$RUN" origin/main || { say "no main branch in $REPO_SRC"; exit 1; }
+if [ -n "$CONTINUE" ]; then
+  # A further round on an earlier run's work: its branch lives in that run's workspace.
+  PREVIOUS="/srv/code/work/$CONTINUE"
+  git fetch --quiet "$PREVIOUS" "visor/$CONTINUE" \
+    || { say "no earlier run to continue at $PREVIOUS (branch visor/$CONTINUE)"; exit 1; }
+  git checkout --quiet -b "visor/$RUN" FETCH_HEAD || { say "could not branch from the earlier run"; exit 1; }
+  say "continuing $CONTINUE from $(git rev-parse --short HEAD)"
+else
+  # Tasks start from main. No fallback: branching from anything else would
+  # produce a plausible-looking result built on the wrong code.
+  git checkout --quiet -b "visor/$RUN" origin/main || { say "no main branch in $REPO_SRC"; exit 1; }
+fi
 # A second lock behind the one in push_result.sh: git itself refuses any push
 # from this workspace that is not to a visor/ branch, whoever types it.
 cat > "$WORK/.git/hooks/pre-push" <<'HOOK'
@@ -84,25 +100,42 @@ for f in AGENTS.md CLAUDE.md; do
 done
 [ -n "$RULES" ] || say "WARNING: no AGENTS.md or CLAUDE.md -- the agent gets no project rules"
 
-GODOT_VER="$(godot-headless "$WORK" --version 2>/dev/null | tail -1)"
-say "godot $GODOT_VER"
-say "importing project"
-godot-import "$WORK" > "$OUT/import.log" 2>&1
-say "baseline tests"
-gut-test "$WORK" > "$OUT/tests-before.log" 2>&1; BEFORE=$?
-say "baseline exit=$BEFORE"
+# What kind of project: Godot gets the import step, the test door and its own
+# instructions; anything else runs the test command it was given, inside the wall.
+if [ -f "$WORK/project.godot" ]; then
+  KIND="godot"
+  command -v flatpak > /dev/null || { say "missing program: flatpak"; exit 1; }
+  ENGINE="godot $(godot-headless "$WORK" --version 2>/dev/null | tail -1)"
+  say "$ENGINE"
+  say "importing project"
+  godot-import "$WORK" > "$OUT/import.log" 2>&1
+else
+  KIND="plain"
+  ENGINE="$(python3 --version 2>&1)"
+  if [ -z "$TESTS" ] && [ "$ROUND" = build ]; then
+    say "this is not a Godot project, so a build round needs --tests CMD"; exit 1
+  fi
+fi
+
+if [ "$ROUND" = build ]; then ACCESS="rw"; else ACCESS="ro"; fi
 
 # Standing instructions go in the system prompt, because a harness keeps that
 # whole when it summarises a long conversation. The first message does not
 # survive a summary, and an agent that has lost the test command invents one.
-if [ "$PLAN_ONLY" = 1 ]; then ROUND="plan"; ACCESS="ro"; else ROUND="build"; ACCESS="rw"; fi
 {
   cat "$HERE/system-prompt.md"
   echo
   cat "$HERE/system-prompt-$ROUND.md"
+  if [ "$KIND" = godot ] && [ "$ROUND" = build ]; then
+    echo; cat "$HERE/system-prompt-godot.md"
+  elif [ -n "$TESTS" ]; then
+    echo; echo "# Checking your work"
+    echo "Run the tests with this command, from the repository's top folder: \`$TESTS\`"
+    echo "Read the first failure before changing anything."
+  fi
   echo
   echo "# This project"
-  echo "The repository is at $WORK (Godot $GODOT_VER)."
+  echo "The repository is at $WORK ($ENGINE)."
   if [ -n "$RULES" ]; then
     echo "Its own rules follow, from $(basename "$RULES"). Obey them."
     echo
@@ -111,6 +144,10 @@ if [ "$PLAN_ONLY" = 1 ]; then ROUND="plan"; ACCESS="ro"; else ROUND="build"; ACC
 } > "$OUT/system-prompt.txt"
 {
   cat "$TASK"
+  if [ -n "$CONTINUE" ]; then
+    echo; echo "THIS BRANCH ALREADY HOLDS AN EARLIER ATTEMPT AT THE TASK."
+    echo "Build on it. The discussion below says what it got right and what is missing."
+  fi
   if [ -n "$NOTES" ]; then
     echo; echo "EARLIER DISCUSSION WITH THE OWNER"; cat "$NOTES"
   fi
@@ -118,7 +155,7 @@ if [ "$PLAN_ONLY" = 1 ]; then ROUND="plan"; ACCESS="ro"; else ROUND="build"; ACC
 
 # The two doors in the wall. Both are closed again as soon as the agent is done.
 mkdir -m 700 "$WALL" || { say "could not create $WALL"; exit 1; }
-echo "$GODOT_VER" > "$WALL/godot-version"   # read by inside/godot
+[ "$KIND" = godot ] && echo "${ENGINE#godot }" > "$WALL/godot-version"   # read by inside/godot
 python3 "$HERE/doors/model-door.py" "$WALL/model.sock" "$MODEL_SERVER" "$MODEL" "$CALLS" \
   2> "$OUT/model-door.log" &
 MODEL_DOOR=$!
@@ -133,7 +170,7 @@ close_doors() {
   DOORS_OPEN=0
   kill $MODEL_DOOR $GODOT_DOOR $WATCHERS 2>/dev/null
   # A Godot the agent started through the test door must not outlive the run.
-  if flatpak ps --columns=application 2>/dev/null | grep -q org.godotengine.Godot; then
+  if [ "$KIND" = godot ] && flatpak ps --columns=application 2>/dev/null | grep -q org.godotengine.Godot; then
     say "WARNING: Godot was still running after the agent; stopping it"
     flatpak kill org.godotengine.Godot
   fi
@@ -159,6 +196,23 @@ refusals() { cat "$OUT/model-door.log" "$OUT/godot-door.log" | grep -c REFUSED; 
 REFUSED_BY_CHECK="$(refusals)"
 # The model's answers to the agent, as the model door recorded them.
 answered() { jq -c 'select(.status == 200)' "$CALLS"; }
+
+# The project's tests. Godot's run outside the wall, inside flatpak's own sandbox;
+# any other project's run inside the wall, since a test is code the agent may have
+# written. Only a build round measures them: the others change nothing.
+run_tests() {
+  if [ "$KIND" = godot ]; then
+    gut-test "$WORK"
+  else
+    "${WALLED[@]}" bash -c "$TESTS" < /dev/null
+  fi
+}
+BEFORE="n/a"
+if [ "$ROUND" = build ]; then
+  say "baseline tests"
+  run_tests > "$OUT/tests-before.log" 2>&1; BEFORE=$?
+  say "baseline exit=$BEFORE"
+fi
 
 say "agent start ($HARNESS, $ROUND round)"
 T0=$(date +%s)
@@ -248,7 +302,6 @@ WATCHERS="$WATCHERS $!"
 
 wait "$AGENT_PID"; AGENT=$?
 T1=$(date +%s)
-close_doors
 say "agent exit=$AGENT after $(( (T1-T0)/60 )) min"
 [ "$AGENT" = 0 ] || say "AGENT FAILED -- see $OUT/agent.err"
 [ -f "$OUT/unexpected-tools.txt" ] \
@@ -264,9 +317,10 @@ harness_final_message > "$OUT/final-message.md" 2> /dev/null
 [ -s "$OUT/final-message.md" ] || say "WARNING: the agent left no closing message"
 
 AFTER="n/a"; PUSHED="nothing to push"; PULL_REQUEST="none"
-if [ "$PLAN_ONLY" = 0 ]; then
+if [ "$ROUND" = build ]; then
   say "tests after"
-  gut-test "$WORK" > "$OUT/tests-after.log" 2>&1; AFTER=$?
+  run_tests > "$OUT/tests-after.log" 2>&1; AFTER=$?
+  close_doors
   git add -A
   git diff --cached --stat > "$OUT/diffstat.txt"
   git diff --cached > "$OUT/changes.diff"
@@ -286,6 +340,8 @@ agent exit: $AGENT   tests before: exit $BEFORE   tests after: exit $AFTER"; the
   else
     say "nothing to commit"
   fi
+else
+  close_doors
 fi
 
 {
@@ -305,8 +361,9 @@ fi
   echo "- task: $NAME"
   echo "- model: $MODEL"
   echo "- harness: $HARNESS $("$HARNESS" --version 2>/dev/null | tail -1)"
-  echo "- godot: $GODOT_VER"
+  echo "- project: $KIND, $ENGINE"
   echo "- round: $ROUND"
+  [ -n "$CONTINUE" ] && echo "- continues: $CONTINUE"
   echo "- agent minutes: $(( (T1-T0)/60 ))   agent exit: $AGENT"
   echo "- tests before: exit $BEFORE   tests after: exit $AFTER"
   echo "- model calls: $(answered | wc -l)   first prompt: $(answered | head -1 | jq -r '.prompt_tokens // "unknown"') tokens" \
@@ -318,7 +375,7 @@ fi
   echo "- branch: visor/$RUN   workspace: $WORK"
   echo "- pushed: $PUSHED"
   echo
-  if [ "$PLAN_ONLY" = 0 ]; then
+  if [ "$ROUND" = build ]; then
     echo "## Files changed"
     echo '```'; cat "$OUT/diffstat.txt" 2>/dev/null; echo '```'
     echo

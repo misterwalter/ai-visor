@@ -1,5 +1,5 @@
 # Qwen Code as the agent loop. Sourced by run_gate.sh, which has set
-# MODEL, PLAN_ONLY and OUT.
+# MODEL, ROUND and OUT.
 #
 # Settings: qwen-settings.json, which the wall puts where the harness looks.
 
@@ -17,7 +17,7 @@ harness_command() {
   excluded="$excluded,web_fetch,web_search,enter_worktree,exit_worktree,record_artifact"
   excluded="$excluded,report_findings,send_message,task_stop,cron_create,cron_delete,cron_list"
   excluded="$excluded,loop_wakeup,read_mcp_resource,zoom_image,monitor"
-  local approval="yolo"; [ "$PLAN_ONLY" = 1 ] && approval="plan"
+  local approval="yolo"; [ "$ROUND" = build ] || approval="plan"
 
   # The prompt comes first: list-valued flags swallow any bare argument after them.
   # --safe-mode stops the harness acting on files in the project (it will start

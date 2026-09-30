@@ -24,7 +24,8 @@ agent, tests before and after, and a report.
 | `doors/godot-door` | The one way from the sandbox to Godot. Accepts four requests. |
 | `inside/` | The programs the agent finds inside the sandbox: `gut-test`, `godot-check`, `godot-import`, the self-check, and a `godot` that explains what to use in its place. |
 | `system-prompt.md` | The agent's standing instructions, kept short on purpose. |
-| `system-prompt-build.md`, `system-prompt-plan.md` | What is added for a build round or a plan-only round. |
+| `system-prompt-build.md`, `system-prompt-plan.md`, `system-prompt-analysis.md` | What is added for each kind of round. |
+| `system-prompt-godot.md` | What a build round on a Godot project adds: the check commands, and Godot 3 habits to avoid. |
 | `harness/qwen.sh`, `harness/pi.sh` | How each agent loop is started, and the tools it may offer. |
 | `qwen-settings.json` | Settings for Qwen Code. |
 | `pi/settings.json`, `pi/models.json` | Settings for pi, and where it finds the model. |
@@ -93,7 +94,18 @@ Options for `run_gate.sh`:
 
 - `--plan-only` the agent may read but not edit, and the workspace is mounted
   read-only. Its output is a plan and questions.
-- `--notes FILE` the owner's replies to an earlier plan round, added to the prompt.
+- `--analysis` the same, but the output is an answer: a question about the code,
+  or advice on it, with file and line references and code samples.
+- `--notes FILE` the owner's replies to an earlier round, added to the prompt.
+- `--continue RUN` start from the branch an earlier run left, instead of from
+  `main`, for a further round on the same work. `RUN` is the earlier run's name.
+- `--tests CMD` how to run the tests of a project that is not Godot, for
+  example `--tests "python3 tests.py"`. Required for a build round on such a
+  project. The command runs inside the sandbox, before and after the agent.
+
+A Godot project is one with a `project.godot` at its top. It gets the import
+step, the test door and the Godot instructions. Any other project gets the
+test command it was given, and no Godot text in its instructions.
 
 Environment variables:
 
@@ -133,7 +145,9 @@ fails its self-check.
 
 ## Where results go
 
-Each run is named `<task>-<model>-<harness>-<date>-<time>`.
+Each run is named `<task>-<model>-<harness>-<date>-<time>`. A plan or analysis
+round changes nothing, so it commits, pushes and opens nothing; its result is
+`final-message.md`.
 
 - `/srv/code/work/<run>/` the workspace: a full clone on branch `visor/<run>`,
   with the agent's changes committed.
