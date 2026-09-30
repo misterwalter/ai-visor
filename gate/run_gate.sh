@@ -158,7 +158,10 @@ if [ "$ROUND" = build ]; then ACCESS="rw"; else ACCESS="ro"; fi
 # The two doors in the wall. Both are closed again as soon as the agent is done.
 mkdir -m 700 "$WALL" || { say "could not create $WALL"; exit 1; }
 [ "$KIND" = godot ] && echo "${ENGINE#godot }" > "$WALL/godot-version"   # read by inside/godot
-python3 "$HERE/doors/model-door.py" "$WALL/model.sock" "$MODEL_SERVER" "$MODEL" "$CALLS" \
+# The model's context window, as it is loaded (num_ctx in its Modelfile).
+WINDOW="$(ollama show "$MODEL" --parameters 2>/dev/null | awk '$1 == "num_ctx" {print $2}')"
+[ -n "$WINDOW" ] || { say "could not read the context window of $MODEL"; exit 1; }
+python3 "$HERE/doors/model-door.py" "$WALL/model.sock" "$MODEL_SERVER" "$MODEL" "$CALLS" "$WINDOW" \
   2> "$OUT/model-door.log" &
 MODEL_DOOR=$!
 # -t is how long socat keeps a connection open for the answer once the request
@@ -351,6 +354,8 @@ fi
 [ -f "$OUT/unexpected-tools.txt" ] \
   && say "STOPPED: the harness offered tools outside the allowed set: $(cat "$OUT/unexpected-tools.txt")"
 [ -f "$OUT/stopped-as-stuck.txt" ] && say "STOPPED: $(cat "$OUT/stopped-as-stuck.txt")"
+TOO_LONG="$(grep -c 'TOO LONG' "$OUT/model-door.log")"
+[ "$TOO_LONG" = 0 ] || say "the model door turned away $TOO_LONG requests too long for the model's window"
 REFUSED=$(( $(refusals) - REFUSED_BY_CHECK ))
 [ "$REFUSED" = 0 ] || say "the doors refused $REFUSED requests from the agent -- see model-door.log and godot-door.log"
 harness_final_message > "$OUT/final-message.md" 2> /dev/null
@@ -417,6 +422,7 @@ fi
        "  largest prompt: $(answered | jq -s '[.[].prompt_tokens // 0] | max // 0') tokens"
   echo "- memory: least available $(awk 'NR > 1 && (m == "" || $2 < m) {m = $2} END{print m + 0}' "$OUT/memory.log") MB," \
        "fastest swapping $(awk 'NR > 1 && $4 > m {m = $4} END{print m + 0}' "$OUT/memory.log") MB/s"
+  [ "$TOO_LONG" = 0 ] || echo "- too long: $TOO_LONG requests exceeded the model's $WINDOW-token window and were turned away"
   echo "- wall: $(grep -c '^ok' "$OUT/wall-check.log") checks passed before the agent started;" \
        "the doors refused $REFUSED requests from the agent"
   echo "- branch: visor/$RUN   workspace: $WORK"

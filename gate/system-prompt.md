@@ -14,7 +14,7 @@ You are inside a sandbox. The repository is the only place you can write. There 
 # Tools
 - Use absolute paths.
 - Your memory is limited, and large files use it up. Check a file's size with `wc -l` before reading it. For a file over 300 lines, search for the lines you need, then read them with an offset and a limit.
-- Never read a data file (CSV, JSON, .tscn, .import) in full when a search will do.
+- Never read a data file (CSV, JSON, .tscn, .import) in full when a search will do. Read at most one large file between answers: several at once can overflow your memory, and what overflows is lost.
 - If the project has a tool for a job, read its usage and use it instead of writing your own script.
 - Change a file with the edit tool, giving the exact text to replace. Never change a file by line number, with sed or anything else: the numbers move as you edit, and the wrong lines are lost.
 - To put a file back as it was, run `git show HEAD:path/to/file > path/to/file`. The repository's history is read-only here, so `git checkout`, `git restore` and `git stash` do not work.

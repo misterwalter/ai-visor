@@ -16,7 +16,12 @@ Each record also says how many times in a row the agent has made the very same
 tool call. An agent that is stuck repeats itself, and the runner stops a run
 when that number passes its limit.
 
-Usage: model-door.py <socket path> <upstream host:port> <model> <calls file>
+A request too long for the model's window is refused with the error a hosted
+model would give. Ollama itself says nothing: it quietly drops the start of the
+conversation, the task included, and the model answers without it. The error
+lets the harness summarise and try again, or stop, rather than carry on blind.
+
+Usage: model-door.py <socket path> <upstream host:port> <model> <calls file> [window]
 """
 
 import http.client
@@ -32,6 +37,9 @@ import time
 ALLOWED_PATH = "/v1/chat/completions"
 # Headers that describe one connection, not the message, and must not be passed on.
 HOP_HEADERS = {"connection", "keep-alive", "transfer-encoding", "content-length", "te", "upgrade"}
+# A token is about 3.6 bytes of request as measured on real runs; dividing by 4
+# errs short, so a request the model could take is never turned away.
+BYTES_PER_TOKEN = 4.0
 # The token counts arrive at the end of a reply, streamed or not.
 TAIL_BYTES = 8192
 USAGE = {name: re.compile(rb'"%s"\s*:\s*(\d+)' % name.encode()) for name in ("prompt_tokens", "completion_tokens")}
@@ -46,6 +54,7 @@ class Door(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     upstream = None  # (host, port), set in main
     model = None
+    window = 0         # the model's context window in tokens; 0 = do not check
     calls_file = None
     calls_lock = threading.Lock()
     last_move = None   # the agent's latest tool calls, as text
@@ -116,6 +125,23 @@ class Door(http.server.BaseHTTPRequestHandler):
         entry = {"time": time.strftime("%H:%M:%S"), "messages": messages, "tools": tools,
                  "repeats": repeats, "request_bytes": len(body), "status": None,
                  "prompt_tokens": None, "completion_tokens": None, "seconds": None}
+        estimate = int(len(body) / BYTES_PER_TOKEN)
+        if self.window and estimate > self.window:
+            entry.update(status="too long", prompt_tokens=estimate, seconds=0)
+            self.record(entry)
+            log(f"TOO LONG: about {estimate} tokens for a {self.window}-token window; refused")
+            message = (f"This model's maximum context length is {self.window} tokens. However, your messages "
+                       f"resulted in about {estimate} tokens. Please reduce the length of the messages.")
+            reply = json.dumps({"error": {"message": message, "type": "invalid_request_error",
+                                          "code": "context_length_exceeded"}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(reply)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(reply)
+            self.close_connection = True
+            return
         upstream = http.client.HTTPConnection(*self.upstream, timeout=None)
         try:
             headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_HEADERS | {"host"}}
@@ -166,9 +192,10 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 
 
 def main():
-    if len(sys.argv) != 5:
+    if len(sys.argv) not in (5, 6):
         sys.exit(__doc__)
-    path, upstream, model, calls_file = sys.argv[1:]
+    path, upstream, model, calls_file = sys.argv[1:5]
+    Door.window = int(sys.argv[5]) if len(sys.argv) == 6 else 0
     host, _, port = upstream.rpartition(":")
     if not host or not port.isdigit():
         sys.exit(f"model-door: upstream must be host:port, got {upstream!r}")
