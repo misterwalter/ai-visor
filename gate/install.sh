@@ -8,12 +8,20 @@ set -eu
 HERE="$(dirname "$(realpath "$0")")"
 
 # Register a model only when its weights are already on disk; never download here.
+# Registering again makes Ollama unload a loaded copy of the model, even from
+# under a run, so it happens only when the recipe has changed since last time.
+mkdir -p "$HOME/.local/state/visor"
 for build in abliterated official; do
   base="$(awk '/^FROM /{print $2}' "$HERE/Modelfile.$build")"
-  if ollama show "$base" > /dev/null 2>&1; then
+  recipe="$(sha256sum < "$HERE/Modelfile.$build")"
+  registered="$HOME/.local/state/visor/registered-coder-$build"
+  if [ -f "$registered" ] && [ "$(cat "$registered")" = "$recipe" ] && ollama show "coder-$build" > /dev/null 2>&1; then
+    echo "model coder-$build unchanged"
+  elif ollama show "$base" > /dev/null 2>&1; then
     # Ollama reports progress on stderr; keep it only if the step fails.
     log="$(ollama create "coder-$build" -f "$HERE/Modelfile.$build" 2>&1)" \
       || { echo "$log"; echo "model coder-$build FAILED to register"; exit 1; }
+    echo "$recipe" > "$registered"
     echo "model coder-$build registered"
   else
     echo "model coder-$build skipped: weights for $base are not on disk"

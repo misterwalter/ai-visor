@@ -437,6 +437,8 @@ class Dispatcher:
                 recent += [(run["finished"], state["note"], run) for run in state.get("runs", [])]
         recent.sort(key=lambda item: (item[0], item[1]), reverse=True)
         queued = [os.path.basename(p) + f" ({os.path.basename(os.path.dirname(p))})" for p in self.queue()]
+        if not running and self.other_run_active():
+            running = ["A run started outside visor, by hand. Visor waits for it to finish."]
         body = ["# Visor", "",
                 "## Running", ""] + (running or ["Nothing."]) + ["",
                 "## Waiting", ""] + ([f"- {q}" for q in queued] or ["Nothing."]) + ["",
