@@ -129,7 +129,8 @@ fails its self-check.
 ```
 
 - The first runs the whole suite. The exit status is 0 when every test passed.
-- `--only NAME` runs only the test files whose name contains `NAME`.
+- `--only FILE` runs only the test files whose name contains `FILE`.
+- `--test NAME` runs only the test functions whose name contains `NAME`, in any file.
 
 ```bash
 ./gate/bin/godot-check /path/to/project scripts/player.gd
@@ -238,7 +239,7 @@ needs to reach the model, so the wall has two narrow openings:
   models, and a pull is an outbound request to an address of the caller's
   choosing. The door records every call in `model-calls.jsonl`, outside the
   wall, so the count of calls and tokens does not rest on the agent's honesty.
-- **The test door** accepts `import`, `test`, `test NAME` and `check FILE`. It
+- **The test door** accepts `import`, `test`, `test NAME`, `testfn NAME` and `check FILE`. It
   runs one Godot at a time, inside wall 2, and sends back the output.
 
 **The self-check.** Before every run, `inside/check-wall` is run inside the

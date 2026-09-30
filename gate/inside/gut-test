@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Run the project's tests. Exit status 0 means every test passed.
-# Usage: gut-test [--only NAME]
+# Usage: gut-test [--only FILE | --test NAME]
 #
-# --only NAME   run only the test files whose name contains NAME
+# --only FILE   run only the test files whose name contains FILE
+# --test NAME   run only the test functions whose name contains NAME
 set -u
 here="$(dirname "$(realpath "$0")")"
 case "${1:-}" in
   "")     request="test" ;;
-  --only) request="test ${2:?--only needs a test file name}" ;;
-  *)      echo "usage: gut-test [--only NAME]" >&2; exit 2 ;;
+  --only) request="test ${2:?--only needs part of a test file name}" ;;
+  --test) request="testfn ${2:?--test needs part of a test function name}" ;;
+  *)      echo "usage: gut-test [--only FILE | --test NAME]" >&2; exit 2 ;;
 esac
 exec "$here/door-request" "$request"

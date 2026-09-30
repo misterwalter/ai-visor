@@ -9,6 +9,7 @@
 #   import            build the import cache
 #   test              run the whole suite
 #   test NAME         run the test files whose name contains NAME
+#   testfn NAME       run the test functions whose name contains NAME
 #   check FILE        compile one script or shader and report its errors
 # The last line sent back is "GATE_EXIT <status>".
 set -u
@@ -18,7 +19,7 @@ LIMIT="${VISOR_TEST_TIME:-15m}"
 
 refuse() {
   echo "godot-door: REFUSED: $1" >&2
-  echo "the test door accepts only: import | test | test NAME | check FILE"
+  echo "the test door accepts only: import | test | test NAME | testfn NAME | check FILE"
   echo "GATE_EXIT 2"
   exit 0
 }
@@ -30,6 +31,9 @@ case "$request" in
   "test "*) name="${request#test }"
             [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || refuse "bad test name"
             cmd=("$here/../bin/gut-test" "$proj" --only "$name") ;;
+  "testfn "*) name="${request#testfn }"
+            [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || refuse "bad test name"
+            cmd=("$here/../bin/gut-test" "$proj" --test "$name") ;;
   "check "*) script="${request#check }"
             # godot-check decides whether this is a file inside the project.
             [[ "$script" =~ ^[A-Za-z0-9_./:-]+$ ]] || refuse "bad script path"
