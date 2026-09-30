@@ -92,6 +92,8 @@ while read -r local_ref local_id remote_ref remote_id; do
 done
 HOOK
 chmod +x "$WORK/.git/hooks/pre-push"
+# Where this run's own work begins, for the checks on it afterwards.
+START="$(git rev-parse HEAD)"
 
 # The project's own rules for contributors, whichever name it keeps them under.
 RULES=""
@@ -380,6 +382,7 @@ agent exit: $AGENT   tests before: exit $BEFORE   tests after: exit $AFTER"; the
   else
     say "nothing to commit"
   fi
+  python3 "$HERE/checks.py" "$WORK" "$START" > "$OUT/checks.md" 2>&1
 else
   close_doors
 fi
@@ -407,6 +410,7 @@ fi
   echo "- project: $KIND, $ENGINE"
   echo "- round: $ROUND"
   [ -n "$CONTINUE" ] && echo "- continues: $CONTINUE"
+  echo "- base: $START"
   echo "- agent minutes: $(( (T1-T0)/60 ))   agent exit: $AGENT"
   echo "- tests before: exit $BEFORE   tests after: exit $AFTER"
   echo "- model calls: $(answered | wc -l)   first prompt: $(answered | head -1 | jq -r '.prompt_tokens // "unknown"') tokens" \
@@ -422,6 +426,13 @@ fi
   if [ "$ROUND" = build ]; then
     echo "## Files changed"
     echo '```'; cat "$OUT/diffstat.txt" 2>/dev/null; echo '```'
+    echo
+    echo "## Checks"
+    echo
+    echo "Found by reading this run's diff, not from the agent's report. Each is a"
+    echo "pointer for a reviewer, not a verdict."
+    echo
+    cat "$OUT/checks.md"
     echo
   fi
   echo "## The agent's closing message"

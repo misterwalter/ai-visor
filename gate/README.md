@@ -17,6 +17,8 @@ agent, tests before and after, and a report.
 | `install.sh` | Registers the models and the timer. Run it after every `git pull`. |
 | `dispatch.py` | The dispatcher: takes task notes, runs them, replies in them. Runs as a service. |
 | `test_dispatch.py` | Its tests: `python3 gate/test_dispatch.py`. No model or Godot needed. |
+| `checks.py` | Reads a build's diff for what a reviewer should look at; its findings go in the report. |
+| `test_checks.py` | Its tests: `python3 gate/test_checks.py`. |
 | `visor.conf.example` | The dispatcher's settings, to copy to `~/.config/visor/visor.conf`. |
 | `run_gate.sh` | One run: fresh clone, new branch, baseline tests, agent, tests again, report. |
 | `watch_run.sh` | Prints one status line a minute until a run finishes. |
