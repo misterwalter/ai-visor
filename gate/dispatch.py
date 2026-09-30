@@ -18,6 +18,8 @@ oldest first.
     dispatch.py serve      the service: loop forever
     dispatch.py once       one pass, then exit (add --dry-run to only say what it would do)
     dispatch.py status     print the queue, the current run and recent results
+    dispatch.py review RUN PROJECT [MODEL]
+                           review an earlier build run; prints where the review is
 
 Settings are in ~/.config/visor/visor.conf (see visor.conf.example). State is
 kept in ~/.local/state/visor/.
@@ -181,6 +183,9 @@ class Dispatcher:
         self.harness = visor.get("harness", "pi")
         self.default_model = visor.get("default_model", "both")
         self.self_update = visor.getboolean("self_update", fallback=False)
+        # After each build, a read-only round on the branch reviews it against the task.
+        self.review = visor.getboolean("review", fallback=False)
+        self.reviewer = visor.get("reviewer", "official")
         self.runner = visor.get("runner", os.path.join(HERE, "run_gate.sh"))
         self.results = visor.get("results", "/srv/code/gate-results")
         self.models = {"official": "coder-official", "abliterated": "coder-abliterated"}
@@ -341,12 +346,73 @@ class Dispatcher:
                 # all it will know of the one before, besides the files.
                 resume = self._where_it_got_to(run_name, result)
             append_to_note(path, self._section(round_, model, run_name, exit_code, result, parts))
+            if self.review and round_ == "build" and result["pushed"] and exit_code != PAUSED_EXIT:
+                state["running"] = {"model": self.reviewer, "round": "review", "started": _stamp()}
+                self.save_state(state)
+                self.write_status()
+                review_run, review_exit, review = self.review_build(run_name, project, task_file, rest)
+                state["runs"].append({"run": review_run, "model": self.reviewer, "round": "review",
+                                      "exit": review_exit, "finished": _stamp(), "pull_request": "none"})
+                state["running"] = None
+                self.save_state(state)
+                append_to_note(path, self._review_section(model, review_run, review_exit, review))
 
         with open(path, encoding="utf-8") as f:
             if not f.read().rstrip().endswith(REPLY_HEADING):
                 append_to_note(path, f"{REPLY_HEADING}\n")
         move(path, self.folder("your-turn"))
         return f"{name}: {round_} round done on {', '.join(models)}; handed back"
+
+    def review_build(self, build_run, project, task_file, rest):
+        """A read-only round on a build's branch, by the reviewer model, asked to check
+        the build against the task, with the diff, the checks and the builder's claims."""
+        build = self._read_result(build_run)
+        base = re.search(r"^- base: (\S+)", build["report"], re.MULTILINE)
+        checks = re.search(r"## Checks\s+(.*?)(?=\n## |\Z)", build["report"], re.DOTALL)
+        brief = ["REVIEW THIS BUILD",
+                 "",
+                 "This branch holds another agent's attempt at the task above. You are its reviewer. You cannot "
+                 "change anything, and you are not asked to fix it: say plainly what is right and what is not.",
+                 "",
+                 (f"Everything the build changed: `git diff {base.group(1)} HEAD`." if base else
+                  "Its commit is the latest on this branch: `git show HEAD`."),
+                 "Read the changed code itself. Run the tests if it helps. Do not trust the builder's report below; "
+                 "check each claim in the code.",
+                 "",
+                 "Automatic checks on the diff found (pointers, not verdicts):",
+                 "",
+                 (checks.group(1).strip() if checks else "- (none recorded)"),
+                 "",
+                 "The builder's own closing report:",
+                 "",
+                 build["message"] or "(it left none)",
+                 "",
+                 "Answer with:",
+                 "1. A table with one row for every point the owner asked for: done, partly, missing, or changed "
+                 "from what was asked; and the evidence, as file and line.",
+                 "2. Anything changed that the owner did not ask for, especially values the owner gave.",
+                 "3. Whether the tests exercise the new behaviour, or would pass without it.",
+                 "4. Where the builder's report says something the code does not bear out.",
+                 "5. One line: merge, merge after the fixes you list, or do not merge."]
+        text = ((rest.strip() + "\n\n") if rest.strip() else "") + "\n".join(brief) + "\n"
+        notes = os.path.join(self.tasks_state, "review-" + slug(build_run) + "-notes.md")
+        write_file(notes, text)
+        cmd = [self.runner, self.projects[project]["source"], task_file, self.models[self.reviewer], self.harness,
+               "--analysis", "--continue", build_run, "--notes", notes]
+        if self.projects[project]["tests"]:
+            cmd += ["--tests", self.projects[project]["tests"]]
+        self.log(f"review of {build_run} by {self.reviewer}: {' '.join(cmd)}")
+        run_name, exit_code = self._run(cmd)
+        return run_name, exit_code, self._read_result(run_name)
+
+    def _review_section(self, built_by, run_name, exit_code, result):
+        lines = [f"## Review of the {built_by} build, {_stamp()}, by the {self.reviewer} model", "",
+                 "An agent's review, not yet calibrated against a person's. Read it as a second opinion.", ""]
+        if not run_name:
+            return "\n".join(lines + [f"The review did not start (exit {exit_code}).", ""])
+        lines += [f"`{run_name}`" + (f" · {result['summary']}" if result["summary"] else ""), ""]
+        lines += [result["message"] or "(The reviewer left no answer.)", ""]
+        return "\n".join(lines)
 
     def _notes_for_part(self, name, rest, resume):
         """The discussion so far, and for a part after a pause, where the last part got to."""
@@ -617,6 +683,23 @@ def main(argv):
         dispatcher.serve()
     elif command == "once":
         print(dispatcher.once(dry_run="--dry-run" in argv) or "nothing to do")
+    elif command == "review":
+        if len(argv) < 4 or argv[3] not in dispatcher.projects:
+            print("usage: dispatch.py review BUILD_RUN PROJECT [official|abliterated]", file=sys.stderr)
+            return 2
+        if len(argv) > 4:
+            dispatcher.reviewer = argv[4]
+        prompt = os.path.join(dispatcher.results, argv[2], "prompt.txt")
+        task, rest = prompt, ""
+        with open(prompt, encoding="utf-8") as f:
+            given = f.read()
+        # The build's prompt holds the task, and after it any discussion it was given.
+        marker = given.find("\nEARLIER DISCUSSION WITH THE OWNER")
+        task_text, rest = (given[:marker], given[marker:]) if marker >= 0 else (given, "")
+        task = os.path.join(dispatcher.tasks_state, "review-" + slug(argv[2])[:17] + ".md")
+        write_file(task, task_text.split("\nTHIS BRANCH ALREADY HOLDS")[0].rstrip() + "\n")
+        run_name, exit_code, _ = dispatcher.review_build(argv[2], argv[3], task, rest)
+        print(f"{run_name} exit {exit_code}: {os.path.join(dispatcher.results, run_name or '', 'final-message.md')}")
     elif command == "status":
         dispatcher.write_status()
         print(open(os.path.join(dispatcher.tasks, "STATUS.md"), encoding="utf-8").read())

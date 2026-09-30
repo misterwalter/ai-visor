@@ -46,7 +46,10 @@ FAKE_RUNNER = textwrap.dedent('''\
                f"- pushed: {'yes, as visor/' + run if build else 'nothing to push'}"]
     if paused:
         report += ["- paused: yes"]
-    report += ["", "## Pull request", "", f"https://example.invalid/pull/{n}" if build and not paused else "none"]
+    report += ["- base: abc123", ""]
+    if build:
+        report += ["## Checks", "", "- **numbers changed:** `x.gd:3`: 80 → 140", ""]
+    report += ["## Pull request", "", f"https://example.invalid/pull/{n}" if build and not paused else "none"]
     with open(os.path.join(out, "agent-output.jsonl"), "w") as f:
         f.write(json.dumps({"type": "compaction_end", "result": {"summary": f"Summary from part {n}."}}) + "\\n")
         f.write(json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": f"Working on it, call {n}."}]}}) + "\\n")
@@ -286,6 +289,49 @@ class DispatchTest(unittest.TestCase):
     def test_no_self_update_happens_under_a_run(self):
         self.other_run = True
         self.d.maybe_update()  # would need git and the network if it did not return at once
+
+    # Reviews
+
+    def reviewing(self):
+        with open(self.config, "a") as f:
+            f.write("\n")
+        text = open(self.config).read().replace("self_update", "x").replace("[visor]\n", "[visor]\nreview = yes\n", 1)
+        with open(self.config, "w") as f:
+            f.write(text)
+        return dispatch.Dispatcher(self.config, self.state, now=lambda: self.clock,
+                                   other_run_active=lambda: self.other_run, log=self.logged.append)
+
+    def test_each_build_is_reviewed_on_its_branch_with_the_checks_and_the_builders_claims(self):
+        d = self.reviewing()
+        self.note("inbox", "task.md", "Project: game\nModel: abliterated\nBuild:\nMake the thing.\n")
+        d.once()
+        build, review = self.calls_made()
+        self.assertEqual(review[2], "coder-official", "the reviewer is the official model")
+        self.assertIn("--analysis", review)
+        self.assertEqual(review[review.index("--continue") + 1], "task-coder-abliterated-pi-run0")
+        brief = review[-1]
+        self.assertIn("REVIEW THIS BUILD", brief)
+        self.assertIn("git diff abc123 HEAD", brief)
+        self.assertIn("80 → 140", brief)
+        self.assertIn("Answer from coder-abliterated.", brief, "the builder's claims, to be checked")
+        note = self.read("your-turn", "task.md")
+        self.assertIn("## Review of the abliterated build", note)
+        self.assertIn("by the official model", note)
+        self.assertLess(note.index("## Build, "), note.index("## Review of"))
+
+    def test_a_paused_build_is_reviewed_once_when_it_finishes(self):
+        os.environ["FAKE_PAUSES"] = "1"
+        d = self.reviewing()
+        self.note("inbox", "task.md", "Project: game\nModel: official\nBuild:\n")
+        d.once()
+        rounds = ["review" if "--analysis" in c else "build" for c in self.calls_made()]
+        self.assertEqual(rounds, ["build", "build", "review"])
+
+    def test_questions_and_plans_are_not_reviewed(self):
+        d = self.reviewing()
+        self.note("inbox", "q.md", "Project: game\nModel: official\nAnalysis: why?\n")
+        d.once()
+        self.assertEqual(len(self.calls_made()), 1)
 
     # Mistakes in a note come back to the owner, loudly
 

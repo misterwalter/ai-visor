@@ -11,6 +11,12 @@ harness = pi
 default_model = both
 # Pull this repository while idle, reinstall, and restart when it changed.
 self_update = yes
+# After each build, a read-only round on its branch reviews it against the task,
+# and the review is added to the note. It is an agent's review: until it has been
+# compared with a person's, read it as a second opinion.
+review = no
+# The model that reviews: official or abliterated.
+reviewer = official
 
 # Ollama's names for the two builds. These are the defaults.
 [models]

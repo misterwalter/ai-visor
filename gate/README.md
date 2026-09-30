@@ -124,6 +124,17 @@ journalctl --user -u visor-dispatch -f                   # its log, live
 - `status` and `once --dry-run` only read. `journalctl -f` follows the log
   until Ctrl-C; the same log is kept in `~/.local/state/visor/dispatch.log`.
 
+With `review = yes`, every finished build is followed by a review round: the
+reviewer model reads the branch, the diff, the checks from the report and the
+builder's own claims, and answers point by point against the task. The review
+is added to the note under its own heading. To review an earlier build by hand:
+
+```bash
+python3 gate/dispatch.py review <build run> <project> [official|abliterated]
+```
+
+- Runs one read-only round on that build's branch and prints where the answer is.
+
 Only one run happens at a time. The dispatcher waits while any other run is in
 progress, including one started by hand. With `self_update = yes` it pulls this
 repository while idle, reinstalls, and restarts itself.
