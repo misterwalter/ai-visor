@@ -46,6 +46,11 @@ SETTLE_SECONDS = 120
 # The run name is built from the note's name, and a socket path is built from the
 # run name; run_gate.sh refuses one that is too long.
 MAX_NAME = 24
+# A run that pauses so the model can be restarted exits with this; the dispatcher
+# carries it on. At most this many parts per model per round, so that a run
+# which pauses at once, every time, cannot go on for ever.
+PAUSED_EXIT = 75
+MAX_PARTS = 6
 # Every section the dispatcher adds begins this way, so the owner's own text is
 # everything before the first one.
 SECTION = "\n---\n\n## "
@@ -299,39 +304,90 @@ class Dispatcher:
             owner_text, rest = split_note(f.read())
         task_file = os.path.join(self.tasks_state, slug(name) + ".md")
         write_file(task_file, owner_text)
-        notes_file = None
-        if rest.strip():
-            notes_file = os.path.join(self.tasks_state, slug(name) + "-notes.md")
-            write_file(notes_file, rest)
 
         for model in models:
-            state["running"] = {"model": model, "round": round_, "started": _stamp()}
-            self.save_state(state)
-            self.write_status()
-            flags = {"analysis": ["--analysis"], "plan": ["--plan-only"], "build": []}[round_]
-            if notes_file:
-                flags += ["--notes", notes_file]
-            if round_ == "build" and state["last_build"].get(model):
-                flags += ["--continue", state["last_build"][model]]
-            if self.projects[project]["tests"]:
-                flags += ["--tests", self.projects[project]["tests"]]
-            cmd = [self.runner, self.projects[project]["source"], task_file, self.models[model], self.harness] + flags
-            self.log(f"{name}: {round_} round on {model}: {' '.join(cmd)}")
-            run_name, exit_code = self._run(cmd)
-            result = self._read_result(run_name)
-            state["runs"].append({"run": run_name, "model": model, "round": round_, "exit": exit_code,
-                                  "finished": _stamp(), "pull_request": result["pull_request"]})
-            if round_ == "build" and run_name and result["pushed"]:
-                state["last_build"][model] = run_name
-            state["running"] = None
-            self.save_state(state)
-            append_to_note(path, self._section(round_, model, run_name, exit_code, result))
+            parts = []
+            resume = ""
+            while True:
+                state["running"] = {"model": model, "round": round_, "started": _stamp(), "part": len(parts) + 1}
+                self.save_state(state)
+                self.write_status()
+                flags = {"analysis": ["--analysis"], "plan": ["--plan-only"], "build": []}[round_]
+                part_notes = self._notes_for_part(name, rest, resume)
+                if part_notes:
+                    flags += ["--notes", part_notes]
+                if round_ == "build" and state["last_build"].get(model):
+                    flags += ["--continue", state["last_build"][model]]
+                if self.projects[project]["tests"]:
+                    flags += ["--tests", self.projects[project]["tests"]]
+                cmd = [self.runner, self.projects[project]["source"], task_file, self.models[model], self.harness] + flags
+                self.log(f"{name}: {round_} round on {model}, part {len(parts) + 1}: {' '.join(cmd)}")
+                run_name, exit_code = self._run(cmd)
+                result = self._read_result(run_name)
+                state["runs"].append({"run": run_name, "model": model, "round": round_, "exit": exit_code,
+                                      "finished": _stamp(), "pull_request": result["pull_request"]})
+                if round_ == "build" and run_name and result["pushed"]:
+                    state["last_build"][model] = run_name
+                state["running"] = None
+                self.save_state(state)
+                parts.append(run_name)
+                if exit_code != PAUSED_EXIT or not run_name:
+                    break
+                if len(parts) >= MAX_PARTS:
+                    result["message"] = (f"Visor stopped carrying this on after {MAX_PARTS} parts. The last part's "
+                                         f"branch holds the work so far.\n\n{result['message']}")
+                    break
+                # The next part starts with a fresh model and a fresh conversation; this is
+                # all it will know of the one before, besides the files.
+                resume = self._where_it_got_to(run_name, result)
+            append_to_note(path, self._section(round_, model, run_name, exit_code, result, parts))
 
         with open(path, encoding="utf-8") as f:
             if not f.read().rstrip().endswith(REPLY_HEADING):
                 append_to_note(path, f"{REPLY_HEADING}\n")
         move(path, self.folder("your-turn"))
         return f"{name}: {round_} round done on {', '.join(models)}; handed back"
+
+    def _notes_for_part(self, name, rest, resume):
+        """The discussion so far, and for a part after a pause, where the last part got to."""
+        text = rest.strip()
+        if resume:
+            text = (text + "\n\n" if text else "") + resume
+        if not text:
+            return None
+        path = os.path.join(self.tasks_state, slug(name) + "-notes.md")
+        write_file(path, text + "\n")
+        return path
+
+    def _where_it_got_to(self, run_name, result):
+        """What a paused part left for the next one: its own last summary of its work,
+        and its last few messages. Read from what the harness printed."""
+        summary, messages = "", []
+        try:
+            with open(os.path.join(self.results, run_name, "agent-output.jsonl"), encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if event.get("type") == "compaction_end" and (event.get("result") or {}).get("summary"):
+                        summary = event["result"]["summary"]
+                    if event.get("type") == "message_end" and (event.get("message") or {}).get("role") == "assistant":
+                        text = "".join(part.get("text", "") for part in event["message"].get("content") or []
+                                       if isinstance(part, dict) and part.get("type") == "text").strip()
+                        if text:
+                            messages.append(text)
+        except FileNotFoundError:
+            pass
+        paused = re.search(r"\*\*PAUSED: (.*?)\.\*\*", result["report"])
+        lines = ["WHERE THE PREVIOUS PART GOT TO",
+                 f"The previous part of this round was paused ({paused.group(1) if paused else 'for a rest'}) so that "
+                 "the model could be restarted. Nothing went wrong. Carry on from where it stopped; do not start again."]
+        if summary:
+            lines += ["", "Its own last summary of the work:", "", summary.strip()]
+        if messages:
+            lines += ["", "Its last messages, oldest first:", ""] + [f"- {m[:600]}" for m in messages[-4:]]
+        return "\n".join(lines)
 
     def _run(self, cmd):
         """Run one gate run. Returns its name (None if it never started) and its exit status."""
@@ -360,6 +416,7 @@ class Dispatcher:
         pr = re.search(r"## Pull request\s+(\S.*)", report)
         result["pull_request"] = pr.group(1).strip() if pr else "none"
         result["pushed"] = bool(re.search(r"^- pushed: yes", report, re.MULTILINE))
+        result["paused"] = bool(re.search(r"^- paused: yes", report, re.MULTILINE))
         facts = []
         for label, pattern in (("minutes", r"agent minutes: (\d+)"), ("agent exit", r"agent exit: (\d+)"),
                                ("tests after", r"tests after: exit (\S+)")):
@@ -369,17 +426,19 @@ class Dispatcher:
         result["summary"] = " · ".join(facts)
         return result
 
-    def _section(self, round_, model, run_name, exit_code, result):
+    def _section(self, round_, model, run_name, exit_code, result, parts=None):
         title = {"analysis": "Answer", "plan": "Plan", "build": "Build"}[round_]
         lines = [f"## {title}, {_stamp()}, {model} model", ""]
         if not run_name:
             lines += [f"The run did not start (exit {exit_code}). The dispatcher's log on the server says why.", ""]
             return "\n".join(lines)
         facts = [f"`{run_name}`"] + ([result["summary"]] if result["summary"] else [])
+        if parts and len(parts) > 1:
+            facts.append(f"in {len(parts)} parts, restarting the model between them")
         if result["pull_request"] not in ("none", ""):
             facts.append(f"pull request: {result['pull_request']}")
         lines += [" · ".join(facts), ""]
-        failed = re.search(r"^\*\*AGENT FAILED.*$", result["report"], re.MULTILINE)
+        failed = re.search(r"^\*\*(AGENT FAILED|PAUSED).*$", result["report"], re.MULTILINE)
         if failed:
             lines += [f"> {failed.group(0)}", ""]
             stopped = re.findall(r"^Stopped .*$", result["report"], re.MULTILINE)
@@ -453,6 +512,8 @@ class Dispatcher:
     def maybe_update(self):
         """Pull this repo while idle. When the code changed, reinstall and restart, so
         that the dispatcher and the runner it starts are always the same version."""
+        if self.other_run_active():
+            return  # never change the runner's files under a run, even one started by hand
         def git(*args):
             return subprocess.run(["git", "-C", REPO] + list(args), capture_output=True, text=True)
         if git("fetch", "--quiet", "origin").returncode != 0:

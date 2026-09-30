@@ -26,19 +26,30 @@ FAKE_RUNNER = textwrap.dedent('''\
     args = sys.argv[1:]
     n = sum(1 for _ in open(calls)) if os.path.exists(calls) else 0
     run = f"{os.path.basename(args[1])[:-3]}-{args[2]}-{args[3]}-run{n}"
+    notes = open(args[args.index("--notes") + 1]).read() if "--notes" in args else ""
     with open(calls, "a") as f:
-        f.write(json.dumps(args) + "\\n")
+        f.write(json.dumps(args + ["NOTES=" + notes]) + "\\n")
     out = os.path.join(results, run)
     os.makedirs(out)
     build = "--analysis" not in args and "--plan-only" not in args
     exit_code = int(os.environ.get("FAKE_EXIT", "0"))
+    paused = n < int(os.environ.get("FAKE_PAUSES", "0"))
+    if paused:
+        exit_code = 75
     report = [f"# {run}", ""]
-    if exit_code:
+    if paused:
+        report += ["**PAUSED: it had run for 4h.** Not finished and not failed.", ""]
+    elif exit_code:
         report += [f"**AGENT FAILED (exit {exit_code}).** Anything below is what it left behind.", "Stopped as stuck: the same call 8 times.", ""]
     report += [f"- agent minutes: 7   agent exit: {exit_code}",
                f"- tests before: exit 0   tests after: exit {'0' if build else 'n/a'}",
-               f"- pushed: {'yes, as visor/' + run if build else 'nothing to push'}", "",
-               "## Pull request", "", f"https://example.invalid/pull/{n}" if build else "none"]
+               f"- pushed: {'yes, as visor/' + run if build else 'nothing to push'}"]
+    if paused:
+        report += ["- paused: yes"]
+    report += ["", "## Pull request", "", f"https://example.invalid/pull/{n}" if build and not paused else "none"]
+    with open(os.path.join(out, "agent-output.jsonl"), "w") as f:
+        f.write(json.dumps({"type": "compaction_end", "result": {"summary": f"Summary from part {n}."}}) + "\\n")
+        f.write(json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": f"Working on it, call {n}."}]}}) + "\\n")
     open(os.path.join(out, "report.md"), "w").write("\\n".join(report) + "\\n")
     open(os.path.join(out, "final-message.md"), "w").write(f"Answer from {args[2]}.\\n")
     print(f"[12:00:00] run {run}  (round)")
@@ -85,6 +96,7 @@ class DispatchTest(unittest.TestCase):
                 """))
         os.environ.update(FAKE_RESULTS=self.results, FAKE_CALLS=self.calls)
         os.environ.pop("FAKE_EXIT", None)
+        os.environ.pop("FAKE_PAUSES", None)
         self.state = os.path.join(root, "state")
         self.other_run = False
         self.logged = []
@@ -224,6 +236,56 @@ class DispatchTest(unittest.TestCase):
         (call,) = self.calls_made()
         self.assertIn("--analysis", call)
         self.assertIn("--notes", call)
+
+    # Long runs are paused and carried on with a fresh model
+
+    def test_a_paused_build_carries_on_from_its_own_branch_until_it_finishes(self):
+        os.environ["FAKE_PAUSES"] = "2"
+        self.note("inbox", "task.md", "Project: game\nModel: official\nBuild:\nMake the thing.\n")
+        self.d.once()
+        calls = self.calls_made()
+        self.assertEqual(len(calls), 3)
+        self.assertNotIn("--continue", calls[0])
+        self.assertEqual(calls[1][calls[1].index("--continue") + 1], "task-coder-official-pi-run0")
+        self.assertEqual(calls[2][calls[2].index("--continue") + 1], "task-coder-official-pi-run1")
+        second_notes = calls[1][-1]
+        self.assertIn("WHERE THE PREVIOUS PART GOT TO", second_notes)
+        self.assertIn("Summary from part 0.", second_notes)
+        self.assertIn("Working on it, call 0.", second_notes)
+        self.assertIn("Summary from part 1.", calls[2][-1], "each part hears from the one just before it")
+        note = self.read("your-turn", "task.md")
+        self.assertIn("in 3 parts", note)
+        self.assertIn("pull request: https://example.invalid/pull/2", note, "only the last part opens one")
+        self.assertEqual(note.count("## Build, "), 1, "one answer per model, however many parts")
+
+    def test_a_paused_question_is_asked_again_with_what_was_found(self):
+        os.environ["FAKE_PAUSES"] = "1"
+        self.note("inbox", "q.md", "Project: game\nModel: official\nAnalysis: why?\n")
+        self.d.once()
+        first, second = self.calls_made()
+        self.assertIn("--analysis", second)
+        self.assertNotIn("--continue", second, "a question has no branch to carry on")
+        self.assertIn("Summary from part 0.", second[-1])
+
+    def test_a_run_that_keeps_pausing_is_given_up_after_a_few_parts(self):
+        os.environ["FAKE_PAUSES"] = "100"
+        self.note("inbox", "task.md", "Project: game\nModel: official\nBuild:\n")
+        self.d.once()
+        self.assertEqual(len(self.calls_made()), dispatch.MAX_PARTS)
+        note = self.read("your-turn", "task.md")
+        self.assertIn(f"stopped carrying this on after {dispatch.MAX_PARTS} parts", note)
+        self.assertIn("> **PAUSED", note)
+
+    def test_both_models_are_each_carried_on_separately(self):
+        os.environ["FAKE_PAUSES"] = "1"
+        self.note("inbox", "task.md", "Project: game\nBuild:\n")
+        self.d.once()
+        models = [c[2] for c in self.calls_made()]
+        self.assertEqual(models, ["coder-official", "coder-official", "coder-abliterated"])
+
+    def test_no_self_update_happens_under_a_run(self):
+        self.other_run = True
+        self.d.maybe_update()  # would need git and the network if it did not return at once
 
     # Mistakes in a note come back to the owner, loudly
 

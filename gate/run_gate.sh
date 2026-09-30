@@ -274,9 +274,31 @@ MAX_CALLS="${VISOR_MAX_CALLS:-1000}"
 ) &
 WATCHERS="$WATCHERS $!"
 
+# Rest: the model server's memory grows through a long run, one step at every
+# summary, until the machine thrashes. A fresh model starts clean. So a run that
+# has gone on this long is paused rather than failed: its work is committed and
+# pushed, the model is unloaded, and the dispatcher carries on from the branch.
+REST_AFTER="${VISOR_REST_AFTER:-4h}"   # 0 = never
+case "$REST_AFTER" in
+  0) REST_SECONDS=0 ;;
+  *h) REST_SECONDS=$(( ${REST_AFTER%h} * 3600 )) ;;
+  *m) REST_SECONDS=$(( ${REST_AFTER%m} * 60 )) ;;
+  *) REST_SECONDS="$REST_AFTER" ;;
+esac
+if [ "$REST_SECONDS" -gt 0 ]; then
+  (
+    sleep "$REST_SECONDS"
+    if kill -0 "$AGENT_PID" 2>/dev/null; then
+      echo "it had run for $REST_AFTER" > "$OUT/paused.txt"
+      kill "$AGENT_PID"
+    fi
+  ) &
+  WATCHERS="$WATCHERS $!"
+fi
+
 # Memory watch: one line a minute, so a run can be read afterwards as memory
 # against context size. A machine that swaps hard for three minutes running is
-# no longer doing useful work, and the run is stopped.
+# no longer doing useful work, and the run is paused, as above.
 SWAP_LIMIT="${VISOR_SWAP_LIMIT:-50}"   # MB per second, in and out together
 (
   swapped() { awk -v kb="$(( $(getconf PAGESIZE) / 1024 ))" '/^pswp(in|out) /{n += $2} END{print n * kb}' /proc/vmstat; }
@@ -314,14 +336,19 @@ WATCHERS="$WATCHERS $!"
 wait "$AGENT_PID"; AGENT=$?
 T1=$(date +%s)
 say "agent exit=$AGENT after $(( (T1-T0)/60 )) min"
-[ "$AGENT" = 0 ] || say "AGENT FAILED -- see $OUT/agent.err"
+PAUSED=""
+[ -f "$OUT/paused.txt" ] && PAUSED="$(cat "$OUT/paused.txt")"
+[ -f "$OUT/stopped-by-memory.txt" ] && PAUSED="the machine was short of memory: $(cat "$OUT/stopped-by-memory.txt")"
+if [ -n "$PAUSED" ]; then
+  say "PAUSED: $PAUSED"
+  # The point of a pause: the next part starts with a fresh model.
+  ollama stop "$MODEL" || say "WARNING: could not unload $MODEL"
+elif [ "$AGENT" != 0 ]; then
+  say "AGENT FAILED -- see $OUT/agent.err"
+fi
 [ -f "$OUT/unexpected-tools.txt" ] \
   && say "STOPPED: the harness offered tools outside the allowed set: $(cat "$OUT/unexpected-tools.txt")"
 [ -f "$OUT/stopped-as-stuck.txt" ] && say "STOPPED: $(cat "$OUT/stopped-as-stuck.txt")"
-if [ -f "$OUT/stopped-by-memory.txt" ]; then
-  say "STOPPED: $(cat "$OUT/stopped-by-memory.txt")"
-  ollama stop "$MODEL" || say "WARNING: could not unload $MODEL"
-fi
 REFUSED=$(( $(refusals) - REFUSED_BY_CHECK ))
 [ "$REFUSED" = 0 ] || say "the doors refused $REFUSED requests from the agent -- see model-door.log and godot-door.log"
 harness_final_message > "$OUT/final-message.md" 2> /dev/null
@@ -339,11 +366,13 @@ if [ "$ROUND" = build ]; then
   # branch is looked at.
   if git -c user.name="visor" -c user.email="visor@localhost" commit --quiet \
        -m "visor gate: $NAME ($MODEL, $HARNESS)" \
-       -m "Written by an agent and not yet reviewed.
+       -m "Written by an agent and not yet reviewed.${PAUSED:+ Paused, not finished: $PAUSED.}
 agent exit: $AGENT   tests before: exit $BEFORE   tests after: exit $AFTER"; then
     if "$HERE/push_result.sh" "$REPO_SRC" "$WORK" > "$OUT/push.log" 2>&1; then
       PUSHED="yes, as visor/$RUN"
-      OPEN_PULL_REQUEST=1
+      # A paused part gets no pull request of its own: the part that finishes
+      # opens one, and its branch holds every part's commits.
+      [ -n "$PAUSED" ] || OPEN_PULL_REQUEST=1
     else
       PUSHED="NO -- $(tail -1 "$OUT/push.log")"
       say "PUSH FAILED -- see $OUT/push.log"
@@ -358,7 +387,10 @@ fi
 {
   echo "# $RUN"
   echo
-  if [ "$AGENT" != 0 ]; then
+  if [ -n "$PAUSED" ]; then
+    echo "**PAUSED: $PAUSED.** Not finished and not failed: the model was restarted, and the work carries on from this branch."
+    echo
+  elif [ "$AGENT" != 0 ]; then
     echo "**AGENT FAILED (exit $AGENT).** Anything below is what it left behind, not a finished result."
     [ -f "$OUT/unexpected-tools.txt" ] \
       && echo "Stopped by the tool guard. Unexpected tools: $(cat "$OUT/unexpected-tools.txt")"
@@ -385,6 +417,7 @@ fi
        "the doors refused $REFUSED requests from the agent"
   echo "- branch: visor/$RUN   workspace: $WORK"
   echo "- pushed: $PUSHED"
+  [ -n "$PAUSED" ] && echo "- paused: yes"
   echo
   if [ "$ROUND" = build ]; then
     echo "## Files changed"
@@ -415,4 +448,6 @@ fi
 { echo; echo "## Pull request"; echo; echo "$PULL_REQUEST"; } >> "$OUT/report.md"
 say "done -> $OUT/report.md"
 echo "GATE_RUN_DONE"
+# 75 is the usual code for "try again later": the dispatcher reads it as a pause.
+[ -n "$PAUSED" ] && exit 75
 exit "$AGENT"

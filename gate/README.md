@@ -167,6 +167,11 @@ Environment variables:
 - `VISOR_TEST_TIME` cap on one test run the agent asks for (default `15m`).
 - `VISOR_SWAP_LIMIT` swapping, in MB per second, that stops a run when it lasts
   three minutes (default 50).
+- `VISOR_REST_AFTER` how long a run goes before it is paused so the model can
+  be restarted (default `4h`; `0` for never). A paused run commits and pushes
+  its work but opens no pull request, and exits with status 75. Swapping past
+  the limit above pauses a run the same way. The dispatcher carries a paused
+  run on by itself; by hand, use `--continue`.
 
 The run refuses to start if the project has no `main` branch or if the sandbox
 fails its self-check.
