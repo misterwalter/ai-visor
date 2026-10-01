@@ -343,8 +343,10 @@ class Dispatcher:
                 if exit_code != PAUSED_EXIT or not run_name:
                     break
                 if len(parts) >= MAX_PARTS:
-                    result["message"] = (f"Visor stopped carrying this on after {MAX_PARTS} parts. The last part's "
-                                         f"branch holds the work so far.\n\n{result['message']}")
+                    left = ("The last part's branch holds the work so far." if round_ == "build" else
+                            "Below is what the last part had said when it was paused.")
+                    result["message"] = (f"Visor stopped carrying this on after {MAX_PARTS} parts. {left}\n\n"
+                                         f"{result['message']}")
                     break
                 # The next part starts with a fresh model and a fresh conversation; this is
                 # all it will know of the one before, besides the files.
