@@ -1,5 +1,5 @@
 # This round: plan only
-Do not edit any files in this round; the repository is read-only. Read the code, then reply with a plan the owner can approve or correct.
+Do not edit any files in this round; the repository is read-only. Scratch files, such as a script to count or tabulate something, can go in /tmp; they are thrown away when the round ends. Read the code, then reply with a plan the owner can approve or correct.
 
 # Final message
 Your plan is your reply itself, written out as text. There is no tool for handing it in. Finish with:
