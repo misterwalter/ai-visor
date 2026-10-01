@@ -162,6 +162,10 @@ Options for `run_gate.sh`:
 - `--notes FILE` the owner's replies to an earlier round, added to the prompt.
 - `--continue RUN` start from the branch an earlier run left, instead of from
   `main`, for a further round on the same work. `RUN` is the earlier run's name.
+- `--fork RUN` carry on the conversation of `RUN`, an earlier part of the same
+  round that was paused, instead of starting a new one. The agent is told only
+  to carry on; the task is already in the conversation. pi only. For a build,
+  give `--continue RUN` as well.
 - `--tests CMD` how to run the tests of a project that is not Godot, for
   example `--tests "python3 tests.py"`. Required for a build round on such a
   project. The command runs inside the sandbox, before and after the agent.
@@ -184,7 +188,10 @@ Environment variables:
   be restarted (default `4h`; `0` for never). A paused run commits and pushes
   its work but opens no pull request, and exits with status 75. Swapping past
   the limit above pauses a run the same way. The dispatcher carries a paused
-  run on by itself; by hand, use `--continue`.
+  run on by itself, with the same conversation where the harness saved one
+  (pi), and otherwise with a note on where it got to; by hand, use `--fork`
+  and `--continue`. The first call of a carried-on part re-reads the whole
+  conversation, which at 40K tokens takes most of an hour.
 
 The run refuses to start if the project has no `main` branch or if the sandbox
 fails its self-check.

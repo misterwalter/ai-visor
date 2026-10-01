@@ -14,6 +14,9 @@ else
   HARNESS_TOOLS='["bash","find","grep","ls","read"]'
 fi
 
+# pi can carry on an earlier conversation: run_gate.sh --fork.
+HARNESS_FORKS=yes
+
 # What the harness writes to stdout: a stream of events, one JSON object per line.
 HARNESS_OUTPUT="agent-output.jsonl"
 
@@ -28,8 +31,10 @@ harness_command() {
     --tools "$(jq -r 'join(",")' <<< "$HARNESS_TOOLS")"
     --no-extensions --no-skills --no-prompt-templates --no-themes
     --no-context-files --no-approve --offline
-    --session-dir "$OUT/harness-log"
-    -- "$(cat "$OUT/prompt.txt")")
+    --session-dir "$OUT/harness-log")
+  # A copy of the earlier part's conversation, as a new conversation in this run's folder.
+  [ -n "$FORK_SESSION" ] && COMMAND+=(--fork "$FORK_SESSION")
+  COMMAND+=(-- "$(cat "$OUT/prompt.txt")")
 }
 
 # Prints the agent's closing message, from what the harness wrote to stdout.

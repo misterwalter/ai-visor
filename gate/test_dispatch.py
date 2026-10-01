@@ -54,6 +54,9 @@ FAKE_RUNNER = textwrap.dedent('''\
     with open(os.path.join(out, "agent-output.jsonl"), "w") as f:
         f.write(json.dumps({"type": "compaction_end", "result": {"summary": f"Summary from part {n}."}}) + "\\n")
         f.write(json.dumps({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": f"Working on it, call {n}."}]}}) + "\\n")
+    if os.environ.get("FAKE_SESSION"):
+        os.makedirs(os.path.join(out, "harness-log"))
+        open(os.path.join(out, "harness-log", f"conversation-{n}.jsonl"), "w").write("{}\\n")
     open(os.path.join(out, "report.md"), "w").write("\\n".join(report) + "\\n")
     open(os.path.join(out, "final-message.md"), "w").write(f"Answer from {args[2]}.\\n")
     print(f"[12:00:00] run {run}  (round)")
@@ -101,6 +104,7 @@ class DispatchTest(unittest.TestCase):
         os.environ.update(FAKE_RESULTS=self.results, FAKE_CALLS=self.calls)
         os.environ.pop("FAKE_EXIT", None)
         os.environ.pop("FAKE_PAUSES", None)
+        os.environ.pop("FAKE_SESSION", None)
         self.state = os.path.join(root, "state")
         self.other_run = False
         self.logged = []
@@ -243,7 +247,40 @@ class DispatchTest(unittest.TestCase):
 
     # Long runs are paused and carried on with a fresh model
 
-    def test_a_paused_build_carries_on_from_its_own_branch_until_it_finishes(self):
+    def test_a_paused_part_carries_on_its_own_conversation_and_branch(self):
+        os.environ.update(FAKE_PAUSES="2", FAKE_SESSION="1")
+        self.note("inbox", "task.md", "Project: game\nModel: official\nBuild:\nMake the thing.\n")
+        self.d.once()
+        first, second, third = self.calls_made()
+        self.assertNotIn("--fork", first)
+        self.assertEqual(second[second.index("--fork") + 1], "task-coder-official-pi-run0")
+        self.assertEqual(second[second.index("--continue") + 1], "task-coder-official-pi-run0")
+        self.assertNotIn("--notes", second, "the task and the discussion are already in the conversation")
+        self.assertEqual(third[third.index("--fork") + 1], "task-coder-official-pi-run1")
+        self.assertIn("in 3 parts", self.read("your-turn", "task.md"))
+
+    def test_a_paused_question_carries_on_its_conversation(self):
+        os.environ.update(FAKE_PAUSES="1", FAKE_SESSION="1")
+        self.note("inbox", "q.md", "Project: game\nModel: official\nAnalysis: why?\n")
+        self.d.once()
+        first, second = self.calls_made()
+        self.assertEqual(second[second.index("--fork") + 1], "q-coder-official-pi-run0")
+        self.assertNotIn("--continue", second, "a question has no branch to carry on")
+
+    def test_a_harness_that_cannot_carry_on_a_conversation_is_told_where_it_got_to(self):
+        os.environ.update(FAKE_PAUSES="1", FAKE_SESSION="1")
+        text = open(self.config).read().replace("harness = pi", "harness = qwen")
+        with open(self.config, "w") as f:
+            f.write(text)
+        d = dispatch.Dispatcher(self.config, self.state, now=lambda: self.clock,
+                                other_run_active=lambda: self.other_run, log=self.logged.append)
+        self.note("inbox", "q.md", "Project: game\nModel: official\nAnalysis: why?\n")
+        d.once()
+        first, second = self.calls_made()
+        self.assertNotIn("--fork", second)
+        self.assertIn("WHERE THE PREVIOUS PART GOT TO", second[-1])
+
+    def test_a_paused_build_with_no_saved_conversation_is_told_where_it_got_to(self):
         os.environ["FAKE_PAUSES"] = "2"
         self.note("inbox", "task.md", "Project: game\nModel: official\nBuild:\nMake the thing.\n")
         self.d.once()
@@ -261,8 +298,9 @@ class DispatchTest(unittest.TestCase):
         self.assertIn("in 3 parts", note)
         self.assertIn("pull request: https://example.invalid/pull/2", note, "only the last part opens one")
         self.assertEqual(note.count("## Build, "), 1, "one answer per model, however many parts")
+        self.assertTrue(any("no conversation saved by task-coder-official-pi-run0" in m for m in self.logged))
 
-    def test_a_paused_question_is_asked_again_with_what_was_found(self):
+    def test_a_paused_question_with_no_saved_conversation_is_asked_again_with_what_was_found(self):
         os.environ["FAKE_PAUSES"] = "1"
         self.note("inbox", "q.md", "Project: game\nModel: official\nAnalysis: why?\n")
         self.d.once()

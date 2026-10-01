@@ -10,19 +10,22 @@
 # --analysis    the agent may read but not edit; its answer to the task is the output
 # --notes FILE  the owner's replies from an earlier round, appended to the prompt
 # --continue RUN  start from the branch an earlier run left, instead of from main
+# --fork RUN    carry on the conversation of RUN, an earlier part of this round that
+#               was paused, instead of starting a new one (harnesses that can)
 # --tests CMD   how to run the project's tests, for a project that is not Godot.
 #               A Godot project (one with project.godot) uses gate/bin/gut-test.
 set -u
 
 REPO_SRC="$(realpath "${1:?repo required}")"; TASK="$(realpath "${2:?task file required}")"
 MODEL="${3:?model required}"; HARNESS="${4:?harness required: qwen or pi}"; shift 4
-ROUND="build"; NOTES=""; CONTINUE=""; TESTS=""
+ROUND="build"; NOTES=""; CONTINUE=""; FORK=""; TESTS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --plan-only) ROUND="plan" ;;
     --analysis) ROUND="analysis" ;;
     --notes) NOTES="$(realpath "$2")"; shift ;;
     --continue) CONTINUE="$2"; shift ;;
+    --fork) FORK="$2"; shift ;;
     --tests) TESTS="$2"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -53,6 +56,20 @@ say "run $RUN  ($ROUND round)"
 
 # shellcheck source=/dev/null
 . "$HERE/harness/$HARNESS.sh"
+
+FORK_SESSION=""
+if [ -n "$FORK" ]; then
+  [ "${HARNESS_FORKS:-no}" = yes ] || { say "$HARNESS cannot carry on an earlier conversation (--fork)"; exit 2; }
+  # The earlier part's conversation, copied to where the wall lets the harness read it.
+  # A subfolder, so that this run's own conversation stays the only one at the top.
+  earlier=(/srv/code/gate-results/"$FORK"/harness-log/*.jsonl)
+  [ "${#earlier[@]}" = 1 ] && [ -f "${earlier[0]}" ] \
+    || { say "expected one conversation in /srv/code/gate-results/$FORK/harness-log, found ${#earlier[@]}"; exit 1; }
+  mkdir -p "$OUT/harness-log/earlier"
+  FORK_SESSION="$OUT/harness-log/earlier/$(basename "${earlier[0]}")"
+  cp "${earlier[0]}" "$FORK_SESSION"
+  say "carrying on the conversation of $FORK"
+fi
 
 for tool in bwrap socat python3 jq flock git "$HARNESS"; do
   command -v "$tool" > /dev/null || { say "missing program: $tool"; exit 1; }
@@ -144,16 +161,26 @@ if [ "$ROUND" = build ]; then ACCESS="rw"; else ACCESS="ro"; fi
     cat "$RULES"
   fi
 } > "$OUT/system-prompt.txt"
-{
-  cat "$TASK"
-  if [ -n "$CONTINUE" ]; then
-    echo; echo "THIS BRANCH ALREADY HOLDS AN EARLIER ATTEMPT AT THE TASK."
-    echo "Build on it. The discussion below says what it got right and what is missing."
-  fi
-  if [ -n "$NOTES" ]; then
-    echo; echo "EARLIER DISCUSSION WITH THE OWNER"; cat "$NOTES"
-  fi
-} > "$OUT/prompt.txt"
+if [ -n "$FORK" ]; then
+  # The task and the discussion are already in the conversation being carried on.
+  {
+    echo "You were paused so that the model could be restarted. Nothing went wrong."
+    echo "Carry on from where you stopped; do not start again."
+    echo "The repository is now at $WORK, with the same files$([ "$ROUND" = build ] && echo ", including everything you committed")."
+    echo "Paths above that begin /srv/code/work/$FORK now begin $WORK."
+  } > "$OUT/prompt.txt"
+else
+  {
+    cat "$TASK"
+    if [ -n "$CONTINUE" ]; then
+      echo; echo "THIS BRANCH ALREADY HOLDS AN EARLIER ATTEMPT AT THE TASK."
+      echo "Build on it. The discussion below says what it got right and what is missing."
+    fi
+    if [ -n "$NOTES" ]; then
+      echo; echo "EARLIER DISCUSSION WITH THE OWNER"; cat "$NOTES"
+    fi
+  } > "$OUT/prompt.txt"
+fi
 
 # The two doors in the wall. Both are closed again as soon as the agent is done.
 mkdir -m 700 "$WALL" || { say "could not create $WALL"; exit 1; }
@@ -430,6 +457,7 @@ fi
   echo "- project: $KIND, $ENGINE"
   echo "- round: $ROUND"
   [ -n "$CONTINUE" ] && echo "- continues: $CONTINUE"
+  [ -n "$FORK" ] && echo "- carries on the conversation of: $FORK"
   echo "- base: $START"
   echo "- agent minutes: $(( (T1-T0)/60 ))   agent exit: $AGENT"
   echo "- tests before: exit $BEFORE   tests after: exit $AFTER"

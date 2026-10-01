@@ -28,6 +28,7 @@ kept in ~/.local/state/visor/.
 import configparser
 import datetime
 import fcntl
+import glob
 import json
 import os
 import re
@@ -52,6 +53,8 @@ MAX_NAME = 24
 # carries it on. At most this many parts per model per round, so that a run
 # which pauses at once, every time, cannot go on for ever.
 PAUSED_EXIT = 75
+# Harnesses that can carry on a saved conversation (run_gate.sh --fork).
+HARNESSES_THAT_FORK = {"pi"}
 MAX_PARTS = 6
 # Every section the dispatcher adds begins this way, so the owner's own text is
 # everything before the first one.
@@ -316,15 +319,19 @@ class Dispatcher:
 
         for model in models:
             parts = []
-            resume = ""
+            resume, fork = "", ""
             while True:
                 state["running"] = {"model": model, "round": round_, "started": _stamp(), "part": len(parts) + 1}
                 self.save_state(state)
                 self.write_status()
                 flags = {"analysis": ["--analysis"], "plan": ["--plan-only"], "build": []}[round_]
-                part_notes = self._notes_for_part(name, rest, resume)
-                if part_notes:
-                    flags += ["--notes", part_notes]
+                if fork:
+                    # The task and the discussion are in the conversation it carries on.
+                    flags += ["--fork", fork]
+                else:
+                    part_notes = self._notes_for_part(name, rest, resume)
+                    if part_notes:
+                        flags += ["--notes", part_notes]
                 if round_ == "build" and state["last_build"].get(model):
                     flags += ["--continue", state["last_build"][model]]
                 if self.projects[project]["tests"]:
@@ -348,9 +355,17 @@ class Dispatcher:
                     result["message"] = (f"Visor stopped carrying this on after {MAX_PARTS} parts. {left}\n\n"
                                          f"{result['message']}")
                     break
-                # The next part starts with a fresh model and a fresh conversation; this is
-                # all it will know of the one before, besides the files.
-                resume = self._where_it_got_to(run_name, result)
+                # The next part starts with a fresh model. Where the harness can, it carries on
+                # the same conversation; otherwise this note is all it will know of the one
+                # before, besides the files.
+                if self.harness in HARNESSES_THAT_FORK and glob.glob(
+                        os.path.join(self.results, run_name, "harness-log", "*.jsonl")):
+                    fork = run_name
+                else:
+                    if self.harness in HARNESSES_THAT_FORK:
+                        self.log(f"{name}: no conversation saved by {run_name}; the next part starts "
+                                 "from a note on where it got to")
+                    fork, resume = "", self._where_it_got_to(run_name, result)
             append_to_note(path, self._section(round_, model, run_name, exit_code, result, parts))
             if self.review and round_ == "build" and result["pushed"] and exit_code != PAUSED_EXIT:
                 state["running"] = {"model": self.reviewer, "round": "review", "started": _stamp()}
