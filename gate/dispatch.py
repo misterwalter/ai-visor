@@ -141,6 +141,9 @@ def write_file(path, text):
 
 
 def append_to_note(path, section):
+    # Command output can carry control characters, NUL among them; one is enough
+    # for an editor to take the whole note for a binary file.
+    section = "".join(c for c in section if c in "\n\t" or ord(c) >= 32)
     with open(path, encoding="utf-8") as f:
         text = f.read()
     write_file(path, text.rstrip() + "\n" + SECTION + section.lstrip().removeprefix("## "))

@@ -412,6 +412,14 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(self.d.queue(), [])
         self.assertEqual(self.calls_made(), [])
 
+    def test_control_characters_never_reach_a_note(self):
+        path = self.note("inbox", "task.md", "Project: game\n")
+        dispatch.append_to_note(path, "## Answer\n\nfine\x00\x00 text\x1b[0m\n")
+        text = self.read("inbox", "task.md")
+        self.assertNotIn("\x00", text)
+        self.assertNotIn("\x1b", text)
+        self.assertIn("fine text[0m", text)
+
     def test_notes_stay_editable_by_the_owners_group(self):
         self.note("inbox", "task.md", "Project: game\nModel: official\n")
         self.d.once()
