@@ -379,8 +379,10 @@ class Dispatcher:
                  "",
                  (f"Everything the build changed: `git diff {base.group(1)} HEAD`." if base else
                   "Its commit is the latest on this branch: `git show HEAD`."),
-                 "Read the changed code itself. Run the tests if it helps. Do not trust the builder's report below; "
-                 "check each claim in the code.",
+                 "Read the changed code itself. Run the tests yourself, with the commands in your instructions, and "
+                 "say what they printed. Do not trust the builder's report below; check each claim in the code.",
+                 "For each new piece, find where the program uses it, and whether anyone running the program would "
+                 "ever see or reach it. Code that nothing calls, or whose effect never shows, is not done.",
                  "",
                  "Automatic checks on the diff found (pointers, not verdicts):",
                  "",

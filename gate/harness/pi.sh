@@ -34,6 +34,13 @@ harness_command() {
 
 # Prints the agent's closing message, from what the harness wrote to stdout.
 harness_final_message() {
-  jq -rs '[.[] | select(.type == "message_end" and .message.role == "assistant")] | last
-          | .message.content[]? | select(.type == "text") | .text' "$OUT/$HARNESS_OUTPUT"
+  # The closing message is often a one-line sign-off after the real answer, so
+  # start from the last substantial one of the last three.
+  jq -rs '[.[] | select(.type == "message_end" and .message.role == "assistant")
+           | [.message.content[]? | select(.type == "text") | .text] | join("")
+           | select(test("\\S"))] as $t
+          | ($t | length) as $n
+          | if $n == 0 then empty else
+              ([range([$n - 3, 0] | max; $n)] | map(select(($t[.] | length) >= 400)) | last // ($n - 1)) as $i
+              | $t[$i:] | join("\n\n") end' "$OUT/$HARNESS_OUTPUT"
 }
