@@ -43,6 +43,7 @@ FAKE_RUNNER = textwrap.dedent('''\
     elif exit_code:
         report += [f"**AGENT FAILED (exit {exit_code}).** Anything below is what it left behind.", "Stopped as stuck: the same call 8 times.", ""]
     report += [f"- agent minutes: 7   agent exit: {exit_code}",
+               f"- model calls: {os.environ.get('FAKE_CALLS_MADE', '12')}   first prompt: 4000 tokens   largest prompt: 9000 tokens",
                f"- tests before: exit 0   tests after: exit {'0' if build else 'n/a'}",
                f"- pushed: {'yes, as visor/' + run if build else 'nothing to push'}"]
     if paused:
@@ -105,6 +106,7 @@ class DispatchTest(unittest.TestCase):
         os.environ.pop("FAKE_EXIT", None)
         os.environ.pop("FAKE_PAUSES", None)
         os.environ.pop("FAKE_SESSION", None)
+        os.environ.pop("FAKE_CALLS_MADE", None)
         self.state = os.path.join(root, "state")
         self.other_run = False
         self.logged = []
@@ -317,6 +319,14 @@ class DispatchTest(unittest.TestCase):
         note = self.read("your-turn", "task.md")
         self.assertIn(f"stopped carrying this on after {dispatch.MAX_PARTS} parts", note)
         self.assertIn("> **PAUSED", note)
+
+    def test_a_part_paused_before_the_model_answered_is_not_carried_on_again(self):
+        # Re-reading a long conversation can outlast a part; the next would do the same.
+        os.environ.update(FAKE_PAUSES="100", FAKE_SESSION="1", FAKE_CALLS_MADE="0")
+        self.note("inbox", "q.md", "Project: game\nModel: official\nAnalysis: why?\n")
+        self.d.once()
+        self.assertEqual(len(self.calls_made()), 1)
+        self.assertIn("part 1 was paused before the model answered once", self.read("your-turn", "q.md"))
 
     def test_both_models_are_each_carried_on_separately(self):
         os.environ["FAKE_PAUSES"] = "1"

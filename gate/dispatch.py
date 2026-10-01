@@ -349,6 +349,11 @@ class Dispatcher:
                 parts.append(run_name)
                 if exit_code != PAUSED_EXIT or not run_name:
                     break
+                if result["calls"] == 0:
+                    # Another part would start from the same place and stop the same way.
+                    result["message"] = (f"Visor stopped carrying this on: part {len(parts)} was paused before the "
+                                         f"model answered once.\n\n{result['message']}")
+                    break
                 if len(parts) >= MAX_PARTS:
                     left = ("The last part's branch holds the work so far." if round_ == "build" else
                             "Below is what the last part had said when it was paused.")
@@ -512,6 +517,8 @@ class Dispatcher:
         result["pull_request"] = pr.group(1).strip() if pr else "none"
         result["pushed"] = bool(re.search(r"^- pushed: yes", report, re.MULTILINE))
         result["paused"] = bool(re.search(r"^- paused: yes", report, re.MULTILINE))
+        calls = re.search(r"^- model calls: (\d+)", report, re.MULTILINE)
+        result["calls"] = int(calls.group(1)) if calls else None
         facts = []
         for label, pattern in (("minutes", r"agent minutes: (\d+)"), ("agent exit", r"agent exit: (\d+)"),
                                ("tests after", r"tests after: exit (\S+)")):

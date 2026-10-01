@@ -326,9 +326,12 @@ case "$REST_AFTER" in
 esac
 if [ "$REST_SECONDS" -gt 0 ]; then
   (
+    # A part that carries on a conversation first re-reads all of it, which can take
+    # an hour. Its time starts at the model's first answer, so that every part works.
+    until [ "$(answered | wc -l)" -gt 0 ] || ! kill -0 "$AGENT_PID" 2>/dev/null; do sleep 10; done
     sleep "$REST_SECONDS"
     if kill -0 "$AGENT_PID" 2>/dev/null; then
-      echo "it had run for $REST_AFTER" > "$OUT/paused.txt"
+      echo "it had run for $REST_AFTER after the model's first answer" > "$OUT/paused.txt"
       kill "$AGENT_PID"
     fi
   ) &
