@@ -191,6 +191,7 @@ class Dispatcher:
         self.reviewer = visor.get("reviewer", "official")
         self.runner = visor.get("runner", os.path.join(HERE, "run_gate.sh"))
         self.results = visor.get("results", "/srv/code/gate-results")
+        self.work = visor.get("work", "/srv/code/work")
         self.models = {"official": "coder-official", "abliterated": "coder-abliterated"}
         if parser.has_section("models"):
             self.models.update(parser["models"])
@@ -372,6 +373,12 @@ class Dispatcher:
         build = self._read_result(build_run)
         base = re.search(r"^- base: (\S+)", build["report"], re.MULTILINE)
         checks = re.search(r"## Checks\s+(.*?)(?=\n## |\Z)", build["report"], re.DOTALL)
+        checks = checks.group(1).strip() if checks else None
+        if checks is None and base:
+            # A build from before the checks existed: run them now on its workspace.
+            checks = subprocess.run([sys.executable, os.path.join(HERE, "checks.py"),
+                                     os.path.join(self.work, build_run), base.group(1)],
+                                    capture_output=True, text=True).stdout.strip() or None
         brief = ["REVIEW THIS BUILD",
                  "",
                  "This branch holds another agent's attempt at the task above. You are its reviewer. You cannot "
@@ -386,7 +393,7 @@ class Dispatcher:
                  "",
                  "Automatic checks on the diff found (pointers, not verdicts):",
                  "",
-                 (checks.group(1).strip() if checks else "- (none recorded)"),
+                 checks or "- (none recorded)",
                  "",
                  "The builder's own closing report:",
                  "",

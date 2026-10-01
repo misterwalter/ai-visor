@@ -9,6 +9,7 @@ Godot, no network.
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -318,6 +319,31 @@ class DispatchTest(unittest.TestCase):
         self.assertIn("## Review of the abliterated build", note)
         self.assertIn("by the official model", note)
         self.assertLess(note.index("## Build, "), note.index("## Review of"))
+
+    def test_a_build_from_before_the_checks_has_them_run_for_its_review(self):
+        work = os.path.join(self.tmp.name, "work")
+        repo = os.path.join(work, "old-build")
+        os.makedirs(repo)
+        git = lambda *a: subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t"] + list(a),
+                                        capture_output=True, text=True, check=True).stdout
+        git("init", "-q")
+        open(os.path.join(repo, "speed.gd"), "w").write("var speed = 80\n")
+        git("add", "-A"); git("commit", "-qm", "base")
+        base = git("rev-parse", "HEAD").strip()
+        open(os.path.join(repo, "speed.gd"), "w").write("var speed = 140\n")
+        git("commit", "-qam", "faster")
+        out = os.path.join(self.results, "old-build")
+        os.makedirs(out)
+        open(os.path.join(out, "report.md"), "w").write(f"# old-build\n\n- base: {base}\n\n## Pull request\n\nnone\n")
+        text = open(self.config).read().replace("[visor]\n", f"[visor]\nwork = {work}\n", 1)
+        with open(self.config, "w") as f:
+            f.write(text)
+        d = self.reviewing()
+        task = os.path.join(self.tmp.name, "task.md")
+        open(task, "w").write("Make it faster.\n")
+        d.review_build("old-build", "game", task, "")
+        (review,) = self.calls_made()
+        self.assertIn("80 → 140", review[-1])
 
     def test_a_paused_build_is_reviewed_once_when_it_finishes(self):
         os.environ["FAKE_PAUSES"] = "1"
