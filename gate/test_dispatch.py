@@ -143,11 +143,11 @@ class DispatchTest(unittest.TestCase):
     def test_the_owners_own_format_parses(self):
         text = "Project: my-game\nAnalysis: Take a look through the regions and score them.\n"
         self.assertEqual(dispatch.parse_header(text),
-                         {"project": "my-game", "model": None, "round": "analysis"})
+                         {"project": "my-game", "model": None, "round": "analysis", "thinking": None})
 
     def test_header_keys_are_case_blind_and_the_first_round_word_wins(self):
         text = "project: game\nMODEL: Official\nbuild:\nPlan: not this\n"
-        self.assertEqual(dispatch.parse_header(text), {"project": "game", "model": "Official", "round": "build"})
+        self.assertEqual(dispatch.parse_header(text), {"project": "game", "model": "Official", "round": "build", "thinking": None})
 
     def test_the_owners_text_ends_where_visors_first_section_begins(self):
         text = "Project: game\nDo a thing.\n\n---\n\n## Plan, today, official model\n\nA plan.\n"
@@ -265,6 +265,30 @@ class DispatchTest(unittest.TestCase):
         note = self.read("your-turn", "ch5.md")
         self.assertIn("## Drafts, ", note)
         self.assertIn("`Chapter4b.md` (draft of `Chapter4a.md`)", note)
+
+    def test_thinking_yes_asks_a_model_that_can_think_to_think(self):
+        self.note("inbox", "ch5.md", "Project: story\nThinking: yes\nWrite: five\n")
+        self.d.once()
+        (call,) = self.calls_made()
+        self.assertEqual(call[call.index("--thinking") + 1], "medium")
+
+    def test_thinking_takes_a_level_and_no_means_none(self):
+        self.note("inbox", "a.md", "Project: story\nThinking: high\nWrite: five\n")
+        self.note("inbox", "b.md", "Project: story\nThinking: No\nWrite: five\n")
+        self.d.once()
+        self.d.once()
+        first, second = self.calls_made()
+        self.assertEqual(first[first.index("--thinking") + 1], "high")
+        self.assertNotIn("--thinking", second)
+
+    def test_thinking_from_a_model_that_cannot_think_is_turned_back(self):
+        self.note("inbox", "a.md", "Project: game\nModel: official\nThinking: yes\nPlan:\n")
+        self.note("inbox", "b.md", "Project: story\nThinking: perhaps\nWrite: five\n")
+        self.d.once()
+        self.d.once()
+        self.assertEqual(self.calls_made(), [])
+        self.assertIn("official cannot think", self.read("your-turn", "a.md"))
+        self.assertIn("`Thinking: perhaps` is not one visor knows", self.read("your-turn", "b.md"))
 
     def test_a_folder_project_s_own_model_is_used_when_the_note_names_none(self):
         self.note("inbox", "ch5.md", "Project: story\nWrite: chapter five\n")

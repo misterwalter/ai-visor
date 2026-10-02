@@ -183,6 +183,9 @@ Options for `run_gate.sh`:
   to carry on; the task is already in the conversation. pi only. For a build,
   give `--continue RUN` as well.
 - `--live-log FILE` append a readable account of the run to `FILE` as it goes.
+- `--thinking LEVEL` ask the model to think before it answers: `low`, `medium`
+  or `high`. pi only, and only for a model marked `supportsReasoningEffort` in
+  `pi/models.json`. A note asks for it with `Thinking: yes` (medium) or a level.
 - `--tests CMD` how to run the tests of a project that is not Godot, for
   example `--tests "python3 tests.py"`. Required for a build round on such a
   project. The command runs inside the sandbox, before and after the agent.

@@ -21,6 +21,8 @@ fi
 HARNESS_FORKS=yes
 # pi reports each event as it happens, which the live log follows.
 HARNESS_STREAMS=yes
+# pi can ask a model to think first (--thinking), where pi/models.json says it can.
+HARNESS_THINKS=yes
 
 # What the harness writes to stdout: a stream of events, one JSON object per line.
 HARNESS_OUTPUT="agent-output.jsonl"
@@ -31,7 +33,7 @@ harness_command() {
   # skills, prompt templates, themes, the project's own instruction files (they are
   # already in the system prompt) and anything in the project's .pi folder.
   COMMAND=(timeout --kill-after=30 "${VISOR_MAX_TIME:-24h}"
-    pi --mode json --provider ollama --model "$MODEL" --thinking off
+    pi --mode json --provider ollama --model "$MODEL" --thinking "${THINKING:-off}"
     --system-prompt "$(cat "$OUT/system-prompt.txt")"
     --tools "$(jq -r 'join(",")' <<< "$HARNESS_TOOLS")"
     --no-extensions --no-skills --no-prompt-templates --no-themes

@@ -46,8 +46,9 @@
           "compat": {
             "supportsStore": false,
             "supportsDeveloperRole": false,
-            "supportsReasoningEffort": false,
-            "maxTokensField": "max_tokens"
+            "supportsReasoningEffort": true,
+            "maxTokensField": "max_tokens",
+            "thinkingFormat": "openai"
           }
         }
       ]

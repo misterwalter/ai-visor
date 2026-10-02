@@ -82,6 +82,7 @@ The first lines of a note tell visor what to do. Only `Project:` is required.
 | `Build:` | For a repository: visor makes the change straight away, on its own branch, and opens a pull request. | |
 | `Write:` | For a folder project: visor writes what you ask and adds it beside your files as new drafts, `Chapter4b.md` after `Chapter4a.md`. It never changes or deletes a file of yours. | |
 | `Model: official`, `abliterated`, `glimmer` or `both` | Which model does the work. `official` and `abliterated` are the two coder builds; `both` runs each in turn and gives you both answers. `glimmer` is the abliterated Muse-Glimmer, for writing: slower, better prose. | The project's own `model` setting, else `both`. |
+| `Thinking: yes` or `no`, or `low`, `medium`, `high` | Whether the model thinks before it answers, and how hard. Its thinking appears in the live log. Slower. Only for models that can think, such as `glimmer`. | No thinking. |
 
 The question or request can go on the same line as `Analysis:`, `Plan:` or
 `Build:`, or below the header, or both.
@@ -117,11 +118,15 @@ def split_note(text):
     return text[:start].rstrip() + "\n", text[start:].strip() + "\n"
 
 
+# What a note's Thinking: line may say, and the level the harness is asked for.
+THINKING = {"no": None, "off": None, "yes": "medium", "on": "medium", "low": "low", "medium": "medium", "high": "high"}
+
+
 def parse_header(owner_text):
-    """Project, model and round from the note's first lines. Missing ones are None."""
-    header = {"project": None, "model": None, "round": None}
+    """Project, model, round and thinking from the note's first lines. Missing ones are None."""
+    header = {"project": None, "model": None, "round": None, "thinking": None}
     for line in owner_text.splitlines()[:12]:
-        match = re.match(r"^\s*(project|model|analysis|plan|build|write)\s*:\s*(.*)$", line, re.IGNORECASE)
+        match = re.match(r"^\s*(project|model|thinking|analysis|plan|build|write)\s*:\s*(.*)$", line, re.IGNORECASE)
         if match is None:
             continue
         key, value = match.group(1).lower(), match.group(2).strip()
@@ -229,6 +234,15 @@ class Dispatcher:
     def folder(self, name):
         return os.path.join(self.tasks, name)
 
+    def can_think(self, model):
+        """Whether the harness can ask this model to think: pi, with the model marked so in pi/models.json."""
+        if self.harness != "pi":
+            return False
+        with open(os.path.join(HERE, "pi", "models.json"), encoding="utf-8") as f:
+            entries = json.load(f)["providers"]["ollama"]["models"]
+        entry = next((e for e in entries if e["id"] == self.models.get(model)), None)
+        return bool(entry and (entry.get("compat") or {}).get("supportsReasoningEffort"))
+
     def live_log(self, note_name, who):
         """One log per note and model: every part and every round of it, in order."""
         return os.path.join(self.logs, f"{os.path.splitext(note_name)[0]} - {who}.md")
@@ -319,6 +333,16 @@ class Dispatcher:
         if round_ == "write" and not settings["folder"]:
             return None, [], None, (f"`{header['project']}` is a repository: ask for `Build:` there. `Write:` "
                                     "is for folder projects.")
+        if header["thinking"] is not None:
+            if header["thinking"].lower() not in THINKING:
+                return None, [], None, (f"`Thinking: {header['thinking']}` is not one visor knows: use yes or no, "
+                                        "or a level: low, medium or high.")
+            if THINKING[header["thinking"].lower()]:
+                cannot = [m for m in models if not self.can_think(m)]
+                if cannot:
+                    return None, [], None, (f"`Thinking: {header['thinking']}` asks for thinking, and "
+                                            f"{', '.join(cannot)} cannot think. Use a model that can, such as "
+                                            "glimmer, or leave the line out.")
         if round_ == "build" and not settings["tests"] and not _is_godot(settings["source"]):
             return None, [], None, (f"`{header['project']}` has no test command in visor's settings, and a build "
                                     "needs one. Ask for a plan or an analysis, or add `tests =` for it.")
@@ -345,6 +369,7 @@ class Dispatcher:
         state = self.load_state(name)
         with open(path, encoding="utf-8") as f:
             owner_text, rest = split_note(f.read())
+        thinking = THINKING.get((parse_header(owner_text)["thinking"] or "no").lower())
         task_file = os.path.join(self.tasks_state, slug(name) + ".md")
         write_file(task_file, owner_text)
 
@@ -360,6 +385,8 @@ class Dispatcher:
                 flags = {"analysis": ["--analysis"], "plan": ["--plan-only"], "build": [], "write": ["--write"]}[round_]
                 if self.projects[project]["folder"]:
                     flags += ["--folder"]
+                if thinking:
+                    flags += ["--thinking", thinking]
                 if fork:
                     # The task and the discussion are in the conversation it carries on.
                     flags += ["--fork", fork]

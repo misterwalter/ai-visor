@@ -18,13 +18,14 @@
 # --fork RUN    carry on the conversation of RUN, an earlier part of this round that
 #               was paused, instead of starting a new one (harnesses that can)
 # --live-log FILE  append a readable account of the run to FILE as it goes (livelog.py)
+# --thinking LEVEL  ask the model to think first: low, medium or high (pi only)
 # --tests CMD   how to run the project's tests, for a project that is not Godot.
 #               A Godot project (one with project.godot) uses gate/bin/gut-test.
 set -u
 
 REPO_SRC="$(realpath "${1:?repo required}")"; TASK="$(realpath "${2:?task file required}")"
 MODEL="${3:?model required}"; HARNESS="${4:?harness required: qwen or pi}"; shift 4
-ROUND="build"; NOTES=""; CONTINUE=""; FORK=""; TESTS=""; LIVE_LOG=""; FOLDER=no
+ROUND="build"; NOTES=""; CONTINUE=""; FORK=""; TESTS=""; LIVE_LOG=""; FOLDER=no; THINKING=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --plan-only) ROUND="plan" ;;
@@ -35,6 +36,7 @@ while [ $# -gt 0 ]; do
     --continue) CONTINUE="$2"; shift ;;
     --fork) FORK="$2"; shift ;;
     --live-log) LIVE_LOG="$2"; shift ;;
+    --thinking) THINKING="$2"; shift ;;
     --tests) TESTS="$2"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -78,7 +80,7 @@ if [ -n "$LIVE_LOG" ]; then
   mkdir -p "$(dirname "$LIVE_LOG")" && touch "$LIVE_LOG" \
     || { say "cannot write the live log $LIVE_LOG"; exit 1; }
   live_note "
-## $(date '+%Y-%m-%d %H:%M') · $ROUND round · $MODEL
+## $(date '+%Y-%m-%d %H:%M') · $ROUND round · $MODEL${THINKING:+ · thinking $THINKING}
 
 \`$RUN\`${FORK:+ · carries on the conversation of \`$FORK\`}${CONTINUE:+ · builds on \`$CONTINUE\`}
 "
@@ -86,6 +88,10 @@ fi
 
 # shellcheck source=/dev/null
 . "$HERE/harness/$HARNESS.sh"
+
+if [ -n "$THINKING" ] && [ "${HARNESS_THINKS:-no}" != yes ]; then
+  say "$HARNESS cannot ask the model to think (--thinking)"; exit 2
+fi
 
 FORK_SESSION=""
 if [ -n "$FORK" ]; then
@@ -534,6 +540,7 @@ fi
   echo "- harness: $HARNESS $("$HARNESS" --version 2>/dev/null | tail -1)"
   echo "- project: $KIND, $ENGINE"
   echo "- round: $ROUND"
+  [ -n "$THINKING" ] && echo "- thinking: $THINKING"
   [ -n "$CONTINUE" ] && echo "- continues: $CONTINUE"
   [ -n "$FORK" ] && echo "- carries on the conversation of: $FORK"
   echo "- base: $START"
