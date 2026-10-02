@@ -110,6 +110,15 @@ further build carries on from that model's earlier branch.
 The dispatcher keeps a `sample-job.md` template in the notes folder, and puts
 it back if it goes missing. It rewrites `STATUS.md` there when something changes.
 
+Each run writes a live log into the notes folder's `logs/`, one file per note
+and model (`<note> - official.md`), every part and round appended in order.
+`livelog.py` follows the harness's event stream and appends once a minute: the
+model's text as it streams, its thinking if it has any, and each tool call as a
+collapsed callout with its arguments and the start of its result. It only ever
+appends, so a synced folder sees one small change a minute. Past 5 MB a log
+carries on in `<note> - official 2.md`. The full record stays in
+`/srv/code/gate-results/<run>/`. pi only: Qwen Code reports nothing until it ends.
+
 ```bash
 cp gate/visor.conf.example ~/.config/visor/visor.conf    # then edit it
 ./gate/install.sh                                        # enables the service
@@ -166,6 +175,7 @@ Options for `run_gate.sh`:
   round that was paused, instead of starting a new one. The agent is told only
   to carry on; the task is already in the conversation. pi only. For a build,
   give `--continue RUN` as well.
+- `--live-log FILE` append a readable account of the run to `FILE` as it goes.
 - `--tests CMD` how to run the tests of a project that is not Godot, for
   example `--tests "python3 tests.py"`. Required for a build round on such a
   project. The command runs inside the sandbox, before and after the agent.
@@ -184,6 +194,7 @@ Environment variables:
 - `VISOR_TEST_TIME` cap on one test run the agent asks for (default `15m`).
 - `VISOR_SWAP_LIMIT` swapping, in MB per second, that stops a run when it lasts
   three minutes (default 50).
+- `VISOR_LIVE_LOG_EVERY` seconds between updates of the live log (default 60).
 - `VISOR_REST_AFTER` how long a run goes, from the model's first answer, before
   it is paused so the model can be restarted (default `4h`; `0` for never). A paused run commits and pushes
   its work but opens no pull request, and exits with status 75. Swapping past

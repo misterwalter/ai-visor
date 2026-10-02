@@ -88,6 +88,9 @@ The question or request can go on the same line as `Analysis:`, `Plan:` or
 ## What happens next
 
 1. Visor moves the note to `working/` while it runs. Leave it alone there.
+   To watch it work, open `STATUS.md`: it links the live log, in `logs/`,
+   where the model's writing and each command it runs appear about once a
+   minute. Each note keeps one log per model, every round of it in order.
 2. When it has an answer, it adds it to the end of the note, under a new
    heading, and moves the note to `your-turn/`.
 3. To carry on, write under `## Your reply` and move the note to `approved/`.
@@ -152,6 +155,11 @@ def append_to_note(path, section):
     write_file(path, text.rstrip() + "\n" + SECTION + section.lstrip().removeprefix("## "))
 
 
+def _link(path):
+    """A link Obsidian follows from anywhere in the vault: the file's name, without .md."""
+    return f"[[{os.path.splitext(os.path.basename(path))[0]}]]"
+
+
 def move(path, folder_path):
     target = os.path.join(folder_path, os.path.basename(path))
     os.replace(path, target)
@@ -195,6 +203,9 @@ class Dispatcher:
         self.runner = visor.get("runner", os.path.join(HERE, "run_gate.sh"))
         self.results = visor.get("results", "/srv/code/gate-results")
         self.work = visor.get("work", "/srv/code/work")
+        # Live logs: what each run is doing, readable in the notes while it goes.
+        self.logs = visor.get("logs", os.path.join(self.tasks, "logs"))
+        self.live_log_every = visor.get("live_log_every", "60")
         self.models = {"official": "coder-official", "abliterated": "coder-abliterated"}
         if parser.has_section("models"):
             self.models.update(parser["models"])
@@ -210,6 +221,10 @@ class Dispatcher:
 
     def folder(self, name):
         return os.path.join(self.tasks, name)
+
+    def live_log(self, note_name, who):
+        """One log per note and model: every part and every round of it, in order."""
+        return os.path.join(self.logs, f"{os.path.splitext(note_name)[0]} - {who}.md")
 
     def _log_to_file(self, message):
         line = f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {message}"
@@ -321,7 +336,9 @@ class Dispatcher:
             parts = []
             resume, fork = "", ""
             while True:
-                state["running"] = {"model": model, "round": round_, "started": _stamp(), "part": len(parts) + 1}
+                log = self.live_log(name, model)
+                state["running"] = {"model": model, "round": round_, "started": _stamp(), "part": len(parts) + 1,
+                                    "log": log}
                 self.save_state(state)
                 self.write_status()
                 flags = {"analysis": ["--analysis"], "plan": ["--plan-only"], "build": []}[round_]
@@ -336,6 +353,7 @@ class Dispatcher:
                     flags += ["--continue", state["last_build"][model]]
                 if self.projects[project]["tests"]:
                     flags += ["--tests", self.projects[project]["tests"]]
+                flags += ["--live-log", log]
                 cmd = [self.runner, self.projects[project]["source"], task_file, self.models[model], self.harness] + flags
                 self.log(f"{name}: {round_} round on {model}, part {len(parts) + 1}: {' '.join(cmd)}")
                 run_name, exit_code = self._run(cmd)
@@ -371,17 +389,18 @@ class Dispatcher:
                         self.log(f"{name}: no conversation saved by {run_name}; the next part starts "
                                  "from a note on where it got to")
                     fork, resume = "", self._where_it_got_to(run_name, result)
-            append_to_note(path, self._section(round_, model, run_name, exit_code, result, parts))
+            append_to_note(path, self._section(round_, model, run_name, exit_code, result, parts, log))
             if self.review and round_ == "build" and result["pushed"] and exit_code != PAUSED_EXIT:
                 state["running"] = {"model": self.reviewer, "round": "review", "started": _stamp()}
                 self.save_state(state)
                 self.write_status()
-                review_run, review_exit, review = self.review_build(run_name, project, task_file, rest)
+                review_log = self.live_log(name, "review")
+                review_run, review_exit, review = self.review_build(run_name, project, task_file, rest, review_log)
                 state["runs"].append({"run": review_run, "model": self.reviewer, "round": "review",
                                       "exit": review_exit, "finished": _stamp(), "pull_request": "none"})
                 state["running"] = None
                 self.save_state(state)
-                append_to_note(path, self._review_section(model, review_run, review_exit, review))
+                append_to_note(path, self._review_section(model, review_run, review_exit, review, review_log))
 
         with open(path, encoding="utf-8") as f:
             if not f.read().rstrip().endswith(REPLY_HEADING):
@@ -389,7 +408,7 @@ class Dispatcher:
         move(path, self.folder("your-turn"))
         return f"{name}: {round_} round done on {', '.join(models)}; handed back"
 
-    def review_build(self, build_run, project, task_file, rest):
+    def review_build(self, build_run, project, task_file, rest, log=None):
         """A read-only round on a build's branch, by the reviewer model, asked to check
         the build against the task, with the diff, the checks and the builder's claims."""
         build = self._read_result(build_run)
@@ -433,18 +452,22 @@ class Dispatcher:
         write_file(notes, text)
         cmd = [self.runner, self.projects[project]["source"], task_file, self.models[self.reviewer], self.harness,
                "--analysis", "--continue", build_run, "--notes", notes]
+        if log:
+            cmd += ["--live-log", log]
         if self.projects[project]["tests"]:
             cmd += ["--tests", self.projects[project]["tests"]]
         self.log(f"review of {build_run} by {self.reviewer}: {' '.join(cmd)}")
         run_name, exit_code = self._run(cmd)
         return run_name, exit_code, self._read_result(run_name)
 
-    def _review_section(self, built_by, run_name, exit_code, result):
+    def _review_section(self, built_by, run_name, exit_code, result, log=None):
         lines = [f"## Review of the {built_by} build, {_stamp()}, by the {self.reviewer} model", "",
-                 "An agent's review, not yet calibrated against a person's. Read it as a second opinion.", ""]
+                 "An agent's review. Checked against a person's on five builds, it found calls to code that does "
+                 "not exist and failing tests, but missed features that nobody would ever see. A second opinion.", ""]
         if not run_name:
             return "\n".join(lines + [f"The review did not start (exit {exit_code}).", ""])
-        lines += [f"`{run_name}`" + (f" · {result['summary']}" if result["summary"] else ""), ""]
+        lines += [f"`{run_name}`" + (f" · {result['summary']}" if result["summary"] else "")
+                  + (f" · live log: {_link(log)}" if log else ""), ""]
         lines += [result["message"] or "(The reviewer left no answer.)", ""]
         return "\n".join(lines)
 
@@ -493,7 +516,8 @@ class Dispatcher:
         """Run one gate run. Returns its name (None if it never started) and its exit status."""
         log_path = os.path.join(self.state_dir, "run.log")
         with open(log_path, "w", encoding="utf-8") as out:
-            exit_code = subprocess.call(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+            exit_code = subprocess.call(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                        env=dict(os.environ, VISOR_LIVE_LOG_EVERY=self.live_log_every))
         with open(log_path, encoding="utf-8", errors="replace") as f:
             log = f.read()
         match = re.search(r"\] run (\S+)", log)
@@ -528,7 +552,7 @@ class Dispatcher:
         result["summary"] = " · ".join(facts)
         return result
 
-    def _section(self, round_, model, run_name, exit_code, result, parts=None):
+    def _section(self, round_, model, run_name, exit_code, result, parts=None, log=None):
         title = {"analysis": "Answer", "plan": "Plan", "build": "Build"}[round_]
         lines = [f"## {title}, {_stamp()}, {model} model", ""]
         if not run_name:
@@ -539,6 +563,8 @@ class Dispatcher:
             facts.append(f"in {len(parts)} parts, restarting the model between them")
         if result["pull_request"] not in ("none", ""):
             facts.append(f"pull request: {result['pull_request']}")
+        if log:
+            facts.append(f"live log: {_link(log)}")
         lines += [" · ".join(facts), ""]
         failed = re.search(r"^\*\*(AGENT FAILED|PAUSED).*$", result["report"], re.MULTILINE)
         if failed:
@@ -594,7 +620,8 @@ class Dispatcher:
                     state = json.load(f)
                 if state.get("running"):
                     r = state["running"]
-                    running.append(f"- `{state['note']}`: {r['round']} round on the {r['model']} model, since {r['started']}")
+                    running.append(f"- `{state['note']}`: {r['round']} round on the {r['model']} model, since {r['started']}"
+                                   + (f" · live log: {_link(r['log'])}" if r.get("log") else ""))
                 recent += [(run["finished"], state["note"], run) for run in state.get("runs", [])]
         recent.sort(key=lambda item: (item[0], item[1]), reverse=True)
         queued = [os.path.basename(p) + f" ({os.path.basename(os.path.dirname(p))})" for p in self.queue()]

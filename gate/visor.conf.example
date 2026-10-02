@@ -12,11 +12,16 @@ default_model = both
 # Pull this repository while idle, reinstall, and restart when it changed.
 self_update = yes
 # After each build, a read-only round on its branch reviews it against the task,
-# and the review is added to the note. It is an agent's review: until it has been
-# compared with a person's, read it as a second opinion.
+# and the review is added to the note. It is an agent's review: compared with a
+# person's on five builds, it caught missing functions and failing tests but not
+# features nobody would see. Read it as a second opinion.
 review = no
 # The model that reviews: official or abliterated.
 reviewer = official
+# Where each run's live log goes (default: logs/ in the notes folder), and how
+# often, in seconds, it is brought up to date.
+# logs = /srv/notes/tasks/logs
+live_log_every = 60
 
 # Ollama's names for the two builds. These are the defaults.
 [models]

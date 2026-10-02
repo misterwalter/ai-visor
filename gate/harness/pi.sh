@@ -8,14 +8,19 @@
 # against this list. pi has no plan mode: a round that changes nothing gets
 # tools that cannot change anything, plus the shell, which the wall keeps
 # read-only in those rounds, so that the agent can run the tests.
+# Not pi's grep or find: they need ripgrep and fd, which are not installed, and try
+# to download them, which the wall stops. Every call to its grep failed. The shell's
+# own grep and find do the same work.
 if [ "$ROUND" = build ]; then
-  HARNESS_TOOLS='["bash","edit","find","grep","read","write"]'
+  HARNESS_TOOLS='["bash","edit","read","write"]'
 else
-  HARNESS_TOOLS='["bash","find","grep","ls","read"]'
+  HARNESS_TOOLS='["bash","ls","read"]'
 fi
 
 # pi can carry on an earlier conversation: run_gate.sh --fork.
 HARNESS_FORKS=yes
+# pi reports each event as it happens, which the live log follows.
+HARNESS_STREAMS=yes
 
 # What the harness writes to stdout: a stream of events, one JSON object per line.
 HARNESS_OUTPUT="agent-output.jsonl"

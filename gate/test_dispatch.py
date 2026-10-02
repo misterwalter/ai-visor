@@ -247,6 +247,26 @@ class DispatchTest(unittest.TestCase):
         self.assertIn("--analysis", call)
         self.assertIn("--notes", call)
 
+    # Live logs
+
+    def test_each_model_s_run_writes_a_live_log_linked_from_the_note(self):
+        self.note("inbox", "task.md", "Project: game\nAnalysis: why?\n")
+        self.d.once()
+        official, abliterated = self.calls_made()
+        logs = os.path.join(self.tasks, "logs")
+        self.assertEqual(official[official.index("--live-log") + 1], os.path.join(logs, "task - official.md"))
+        self.assertEqual(abliterated[abliterated.index("--live-log") + 1], os.path.join(logs, "task - abliterated.md"))
+        note = self.read("your-turn", "task.md")
+        self.assertIn("live log: [[task - official]]", note)
+        self.assertIn("live log: [[task - abliterated]]", note)
+
+    def test_a_running_round_shows_its_live_log_in_status(self):
+        self.d.save_state({"note": "task.md", "runs": [], "last_build": {},
+                           "running": {"model": "official", "round": "plan", "started": "now",
+                                       "log": os.path.join(self.tasks, "logs", "task - official.md")}})
+        self.d.write_status()
+        self.assertIn("live log: [[task - official]]", self.read("", "STATUS.md"))
+
     # Long runs are paused and carried on with a fresh model
 
     def test_a_paused_part_carries_on_its_own_conversation_and_branch(self):

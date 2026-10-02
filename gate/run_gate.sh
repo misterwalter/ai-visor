@@ -12,13 +12,14 @@
 # --continue RUN  start from the branch an earlier run left, instead of from main
 # --fork RUN    carry on the conversation of RUN, an earlier part of this round that
 #               was paused, instead of starting a new one (harnesses that can)
+# --live-log FILE  append a readable account of the run to FILE as it goes (livelog.py)
 # --tests CMD   how to run the project's tests, for a project that is not Godot.
 #               A Godot project (one with project.godot) uses gate/bin/gut-test.
 set -u
 
 REPO_SRC="$(realpath "${1:?repo required}")"; TASK="$(realpath "${2:?task file required}")"
 MODEL="${3:?model required}"; HARNESS="${4:?harness required: qwen or pi}"; shift 4
-ROUND="build"; NOTES=""; CONTINUE=""; FORK=""; TESTS=""
+ROUND="build"; NOTES=""; CONTINUE=""; FORK=""; TESTS=""; LIVE_LOG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --plan-only) ROUND="plan" ;;
@@ -26,6 +27,7 @@ while [ $# -gt 0 ]; do
     --notes) NOTES="$(realpath "$2")"; shift ;;
     --continue) CONTINUE="$2"; shift ;;
     --fork) FORK="$2"; shift ;;
+    --live-log) LIVE_LOG="$2"; shift ;;
     --tests) TESTS="$2"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -53,6 +55,19 @@ mkdir -p "$OUT/harness-log" /srv/code/work
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 
 say "run $RUN  ($ROUND round)"
+
+# The live log, for the owner to read while the run goes: a heading now, the
+# agent's work as it happens, the outcome at the end.
+live_note() { [ -z "$LIVE_LOG" ] || python3 "$HERE/livelog.py" note "$LIVE_LOG" "$1"; }
+if [ -n "$LIVE_LOG" ]; then
+  mkdir -p "$(dirname "$LIVE_LOG")" && touch "$LIVE_LOG" \
+    || { say "cannot write the live log $LIVE_LOG"; exit 1; }
+  live_note "
+## $(date '+%Y-%m-%d %H:%M') · $ROUND round · $MODEL
+
+\`$RUN\`${FORK:+ · carries on the conversation of \`$FORK\`}${CONTINUE:+ · builds on \`$CONTINUE\`}
+"
+fi
 
 # shellcheck source=/dev/null
 . "$HERE/harness/$HARNESS.sh"
@@ -270,6 +285,17 @@ harness_command
 # stdin must be readable: under nohup it is not, and a harness dies with EBADF.
 "${WALLED[@]}" "${COMMAND[@]}" < /dev/null > "$OUT/$HARNESS_OUTPUT" 2> "$OUT/agent.err" &
 AGENT_PID=$!
+LIVE_LOG_PID=""
+if [ -n "$LIVE_LOG" ]; then
+  live_note "*$(date +%H:%M) agent started*"
+  if [ "${HARNESS_STREAMS:-no}" = yes ]; then
+    python3 "$HERE/livelog.py" follow "$OUT/$HARNESS_OUTPUT" "$LIVE_LOG" --work "$WORK" \
+      --every "${VISOR_LIVE_LOG_EVERY:-60}" 2>> "$OUT/live-log.err" &
+    LIVE_LOG_PID=$!
+  else
+    live_note "$HARNESS reports nothing until it finishes; its closing message will appear here then."
+  fi
+fi
 
 # Guard: the first request shows exactly which tools the harness offered.
 # Anything outside the harness's list ends the run.
@@ -377,6 +403,8 @@ WATCHERS="$WATCHERS $!"
 
 wait "$AGENT_PID"; AGENT=$?
 T1=$(date +%s)
+# Stopped, it writes what is left.
+[ -z "$LIVE_LOG_PID" ] || { kill "$LIVE_LOG_PID" 2>/dev/null; wait "$LIVE_LOG_PID"; }
 say "agent exit=$AGENT after $(( (T1-T0)/60 )) min"
 # A harness can exit cleanly without the model ever answering, when the model
 # server fails under it. That is a failure, however the harness exited.
@@ -510,6 +538,15 @@ fi
 # Added after the pull request was opened, since the report is its body.
 { echo; echo "## Pull request"; echo; echo "$PULL_REQUEST"; } >> "$OUT/report.md"
 say "done -> $OUT/report.md"
+if [ -n "$LIVE_LOG" ]; then
+  [ "${HARNESS_STREAMS:-no}" = yes ] || live_note "$(cat "$OUT/final-message.md")"
+  OUTCOME="**Finished**"
+  [ "$AGENT" = 0 ] || OUTCOME="**Failed** (exit $AGENT$([ -f "$OUT/stopped-as-stuck.txt" ] && echo ", stopped as stuck: $(cat "$OUT/stopped-as-stuck.txt")"))"
+  [ -n "$PAUSED" ] && OUTCOME="**Paused**: $PAUSED"
+  live_note "
+*$(date +%H:%M)* $OUTCOME · $(( (T1-T0)/60 )) minutes · $(answered | wc -l) model calls$([ "$ROUND" = build ] && echo " · tests after: exit $AFTER · pull request: $PULL_REQUEST")
+"
+fi
 echo "GATE_RUN_DONE"
 # 75 is the usual code for "try again later": the dispatcher reads it as a pause.
 [ -n "$PAUSED" ] && exit 75
