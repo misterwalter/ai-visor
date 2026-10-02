@@ -10,7 +10,7 @@ You are inside a sandbox. The project's folder is the only place you can write. 
 - If a command fails, read its message before trying a variation. Do not repeat a call that failed; do something else.
 
 # Files
-- Never change a file that was in the folder when you started. Write each new version as a new file, named with the next draft letter: `Chapter4b.md` after `Chapter4a.md`, `Chapter4a.md` after `Chapter4.md`. Check which letters exist first. Visor saves any change to an existing file as a new draft anyway, so changing one in place only makes the drafts harder to follow.
+- Never change a file that was in the folder when you started. Write each new version as a new file, named with the next draft letter: `Chapter4b.md` after `Chapter4a.md`, `Chapter4a.md` after `Chapter4.md`. A new piece is a first draft: `Chapter5a.md`, not `Chapter5.md`. Check which letters exist first. Visor saves any change to an existing file as a new draft anyway, so changing one in place only makes the drafts harder to follow.
 - A file you created in this round you may keep editing, with the edit tool.
 - Use absolute paths.
 - Your memory is limited, and long files use it up. Check a file's length with `wc -l` before reading it, and read a long one in parts, with an offset and a limit.

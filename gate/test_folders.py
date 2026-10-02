@@ -90,6 +90,14 @@ class FoldersTest(unittest.TestCase):
         self.assertIn("`Chapter4b.md` (draft of `Chapter4a.md`)", text)
         self.assertIn("left alone: `Story Bible.md`", text)
 
+    def test_a_new_numbered_piece_is_delivered_as_its_first_draft(self):
+        work = self.run_writes("run1", {"Chapter5.md": "Five.\n", "Notes on Mara.md": "Notes.\n"})
+        lines = "\n".join(folders.deliver(work, self.folder))
+        self.assertEqual(self.read("Chapter5a.md"), "Five.\n")
+        self.assertFalse(os.path.exists(os.path.join(self.folder, "Chapter5.md")))
+        self.assertEqual(self.read("Notes on Mara.md"), "Notes.\n", "a name without a number keeps its name")
+        self.assertIn("`Chapter5a.md` (new, named as a first draft)", lines)
+
     def test_a_name_the_owner_took_meanwhile_is_not_overwritten(self):
         work = self.run_writes("run1", {"Chapter5a.md": "The bot's five.\n"})
         self.write(self.folder, "Chapter5a.md", "The owner's own five.\n")

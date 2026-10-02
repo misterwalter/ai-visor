@@ -229,7 +229,8 @@ notes, say. In the settings it has `folder =` where a repository has `source =`.
   folder, and hidden files such as `.obsidian/` are left out. A run clones that
   history like any repository, and its commits go back into it as `visor/<run>`.
 - **Drafts, never overwrites.** When a writing round ends, `folders.py deliver`
-  copies back what the run wrote. A new file is copied as it is. A file the run
+  copies back what the run wrote. A new file is copied as it is, with a draft letter if its name ends in a
+  number (`Chapter5.md` becomes `Chapter5a.md`). A file the run
   changed is copied as the next draft beside the original: `Chapter4a.md`
   becomes `Chapter4b.md`, `Chapter4.md` becomes `Chapter4a.md`, and a name not
   ending in a number gets a spaced letter, `Story Bible a.md`. A name the owner

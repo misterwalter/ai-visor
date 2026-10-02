@@ -10,9 +10,10 @@ so nothing is added to the folder and nothing extra is synced. A run clones that
 history like any repository, and its commits go back into it on a branch of
 their own.
 
-Delivery never overwrites. A file the run added is copied to the folder; one it
-changed is copied as the next draft beside the original, "Chapter4a.md" becoming
-"Chapter4b.md"; one it deleted is left alone. Prints one line per file, for the
+Delivery never overwrites. A file the run added is copied to the folder, with a
+draft letter if its name ends in a number ("Chapter5.md" becomes "Chapter5a.md");
+one it changed is copied as the next draft beside the original, "Chapter4a.md"
+becoming "Chapter4b.md"; one it deleted is left alone. Prints one line per file, for the
 run's report.
 """
 
@@ -91,7 +92,14 @@ def deliver(work, folder):
         if status == "D":
             lines.append(f"- left alone: `{rel}`, which the run deleted")
             continue
-        if status == "A" and not os.path.exists(os.path.join(folder, rel)):
+        stem = os.path.splitext(os.path.basename(rel))[0]
+        if status == "A" and stem[-1:].isdigit():
+            # A new piece is a first draft, and a draft carries a letter: Chapter5.md is Chapter5a.md.
+            target, note = next_draft(folder, rel, taken), "new, named as a first draft"
+            if target is None:
+                lines.append(f"- NOT DELIVERED: `{rel}`: no draft letter left after z")
+                continue
+        elif status == "A" and not os.path.exists(os.path.join(folder, rel)):
             target, note = rel, "new"
         else:
             target = next_draft(folder, rel, taken)

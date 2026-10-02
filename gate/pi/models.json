@@ -47,8 +47,11 @@
             "supportsStore": false,
             "supportsDeveloperRole": false,
             "supportsReasoningEffort": true,
-            "maxTokensField": "max_tokens",
-            "thinkingFormat": "openai"
+            "maxTokensField": "max_tokens"
+          },
+          "reasoning": true,
+          "thinkingLevelMap": {
+            "off": "none"
           }
         }
       ]
