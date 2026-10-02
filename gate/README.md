@@ -218,6 +218,18 @@ Environment variables:
 The run refuses to start if the project has no `main` branch or if the sandbox
 fails its self-check.
 
+## Making a project from a note
+
+A note starting `New project: <name>` makes a project without anyone editing the
+settings; see "Making a new project" in `sample-job.md` for its lines. A folder
+project's folder is made under `tasks/projects/` (`projects_folder`). A GitHub
+project is cloned into `/srv/code/<name>` (`repos`), from `github_owner`'s
+account or a named `owner/repo`, with the server's own GitHub access. Visor
+records each project it makes in `projects.conf` beside the settings file
+(`created_projects`); it never rewrites the settings file itself. A name already
+taken, a repository that cannot be cloned, or a folder already on the server
+comes back to the owner with the reason.
+
 ## Folder projects
 
 A project can be a plain folder instead of a repository: a story kept in the

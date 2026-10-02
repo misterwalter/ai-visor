@@ -104,6 +104,21 @@ The question or request can go on the same line as `Analysis:`, `Plan:` or
 
 Builds never touch `main`. Each one is pushed to its own `visor/` branch with a
 pull request, and a further build on the same note carries on from that branch.
+
+## Making a new project
+
+A note whose first line is `New project:` makes one, and runs no model:
+
+| Line | Meaning |
+|---|---|
+| `New project: <name>` | The project's name, for `Project:` lines from then on. |
+| `GitHub: no` | A folder project: visor makes `tasks/projects/<name>/`, and you put its files there. This is the default. |
+| `GitHub: yes` | Visor clones your GitHub repository of that name to the server. |
+| `GitHub: owner/repo` | Visor clones that repository instead. |
+| `Model: <model>` | The model for the project's notes when they name none, for example `glimmer`. |
+| `Tests: <command>` | How to run the tests of a repository that is not Godot, so visor can build on it. |
+
+Visor answers in the note: made, and where; or why not.
 """
 
 
@@ -124,12 +139,14 @@ THINKING = {"no": None, "off": None, "yes": "medium", "on": "medium", "low": "lo
 
 def parse_header(owner_text):
     """Project, model, round and thinking from the note's first lines. Missing ones are None."""
-    header = {"project": None, "model": None, "round": None, "thinking": None}
+    header = {"project": None, "model": None, "round": None, "thinking": None,
+              "new project": None, "github": None, "tests": None}
     for line in owner_text.splitlines()[:12]:
-        match = re.match(r"^\s*(project|model|thinking|analysis|plan|build|write)\s*:\s*(.*)$", line, re.IGNORECASE)
+        match = re.match(r"^\s*(project|model|thinking|new\s+project|github|tests|analysis|plan|build|write)\s*:\s*(.*)$",
+                         line, re.IGNORECASE)
         if match is None:
             continue
-        key, value = match.group(1).lower(), match.group(2).strip()
+        key, value = re.sub(r"\s+", " ", match.group(1).lower()), match.group(2).strip()
         if key in ROUNDS:
             header["round"] = header["round"] or key
         elif not header[key]:
@@ -180,6 +197,10 @@ class ConfigError(Exception):
     pass
 
 
+class ProjectError(Exception):
+    """Why a project asked for in a note could not be made; told to the owner in the note."""
+
+
 class Dispatcher:
     def __init__(self, config_path, state_dir, now=time.time, other_run_active=None, log=None):
         self.now = now
@@ -218,18 +239,36 @@ class Dispatcher:
                        "glimmer": "glimmer-abliterated"}
         if parser.has_section("models"):
             self.models.update(parser["models"])
+        # Projects made from a note ("New project:") are kept in a file of their own,
+        # which visor writes; the settings file is the owner's and is never rewritten.
+        self.config_path = path
+        self.created_path = visor.get("created_projects", os.path.join(os.path.dirname(path), "projects.conf"))
+        self.projects_folder = visor.get("projects_folder", os.path.join(self.tasks, "projects"))
+        self.repos = visor.get("repos", "/srv/code")
+        self.github_owner = visor.get("github_owner")
+        self.github_url = visor.get("github_url", "git@github.com:{repo}.git")
         self.projects = {}
-        for section in parser.sections():
-            if section.startswith("project "):
-                name = section[len("project "):].strip()
-                source, folder = parser[section].get("source"), parser[section].get("folder")
-                if bool(source) == bool(folder):
-                    _fail(f"{path}: [{section}] needs either source (a repository) or folder (a plain folder)")
-                self.projects[name] = {"source": source or folder, "tests": parser[section].get("tests", ""),
-                                       "folder": bool(folder), "model": parser[section].get("model")}
+        self._add_projects(parser, path)
+        if os.path.exists(self.created_path):
+            made = configparser.ConfigParser()
+            made.read(self.created_path)
+            self._add_projects(made, self.created_path)
         for folder in FOLDERS:
             if not os.path.isdir(os.path.join(self.tasks, folder)):
                 raise ConfigError(f"the tasks folder has no {folder}/: {self.tasks}")
+
+    def _add_projects(self, parser, path):
+        for section in parser.sections():
+            if not section.startswith("project "):
+                continue
+            name = section[len("project "):].strip()
+            if name in self.projects:
+                _fail(f"{path}: project {name} is defined twice")
+            source, folder = parser[section].get("source"), parser[section].get("folder")
+            if bool(source) == bool(folder):
+                _fail(f"{path}: [{section}] needs either source (a repository) or folder (a plain folder)")
+            self.projects[name] = {"source": source or folder, "tests": parser[section].get("tests", ""),
+                                   "folder": bool(folder), "model": parser[section].get("model")}
 
     def folder(self, name):
         return os.path.join(self.tasks, name)
@@ -353,6 +392,11 @@ class Dispatcher:
     def process(self, path, dry_run=False):
         """Take one note: run it, reply in it, hand it back. Returns a line for the log."""
         name = os.path.basename(path)
+        with open(path, encoding="utf-8") as f:
+            if parse_header(split_note(f.read())[0])["new project"] is not None:
+                if dry_run:
+                    return f"would create the project asked for in {name}"
+                return self.create_project(path)
         round_, models, project, error = self.plan_for(path)
         if dry_run:
             if error:
@@ -456,6 +500,82 @@ class Dispatcher:
                 append_to_note(path, f"{REPLY_HEADING}\n")
         move(path, self.folder("your-turn"))
         return f"{name}: {round_} round done on {', '.join(models)}; handed back"
+
+    def create_project(self, path):
+        """A note asking for a new project: make it, record it, and say so in the note."""
+        name_of_note = os.path.basename(path)
+        with open(path, encoding="utf-8") as f:
+            header = parse_header(split_note(f.read())[0])
+        try:
+            entry, said = self._make_project(header)
+        except ProjectError as error:
+            append_to_note(path, f"## Visor could not create the project, {_stamp()}\n\n{error}\n\n"
+                                 f"Fix the note and move it back to `inbox/`.\n\n{REPLY_HEADING}\n")
+            move(path, self.folder("your-turn"))
+            return f"handed back {name_of_note}: {error}"
+        name = header["new project"].strip()
+        lines = [f"[project {name}]"] + [f"{key} = {value}" for key, value in entry.items() if value]
+        with open(self.created_path, "a", encoding="utf-8") as f:
+            f.write("\n" + "\n".join(lines) + "\n")
+        self._read_config(self.config_path)
+        append_to_note(path, f"## Project created, {_stamp()}\n\n{said}\n\n"
+                             f"Notes for it start with `Project: {name}`.\n\n{REPLY_HEADING}\n")
+        move(path, self.folder("your-turn"))
+        self.log(f"{name_of_note}: created project {name}")
+        return f"{name_of_note}: created project {name}"
+
+    def _make_project(self, header):
+        """Make the folder or clone the repository. Returns (settings, what to tell the owner)."""
+        name = header["new project"].strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,60}", name):
+            raise ProjectError(f"`{name}` cannot be a project name: use letters, digits, spaces, dots, "
+                               "dashes and underscores, starting with a letter or digit.")
+        if name in self.projects:
+            raise ProjectError(f"there is already a project called `{name}`.")
+        model = (header["model"] or "").strip().lower() or None
+        if model and model not in self.models:
+            raise ProjectError(f"`Model: {header['model']}` is not one visor knows: use {', '.join(sorted(self.models))}.")
+        github = (header["github"] or "no").strip()
+        if github.lower() in ("no", "none", "false", ""):
+            folder = os.path.join(self.projects_folder, name)
+            existed = os.path.isdir(folder)
+            os.makedirs(folder, exist_ok=True)
+            os.chmod(folder, 0o2775)
+            said = (f"A folder project. Its folder is `{os.path.relpath(folder, os.path.dirname(self.tasks))}`"
+                    + (", which was already there." if existed else ", new and empty.")
+                    + " Put what visor should read there, such as chapters and a story bible. "
+                    "Ask for `Write:`, `Plan:` or `Analysis:` rounds.")
+            return {"folder": folder, "model": model}, said
+        if github.lower() in ("yes", "true"):
+            if not self.github_owner:
+                raise ProjectError("`GitHub: yes` needs the GitHub account to look in, and visor's settings "
+                                   "name none (`github_owner`). Name the repository instead: `GitHub: owner/repo`.")
+            repo = f"{self.github_owner}/{name}"
+        elif re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", github):
+            repo = github
+        else:
+            raise ProjectError(f"`GitHub: {github}` is not one visor understands: use yes, no, or owner/repo.")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+            raise ProjectError(f"a project cloned from GitHub becomes a folder on the server, so `{name}` "
+                               "may not contain spaces.")
+        target = os.path.join(self.repos, name)
+        if os.path.exists(target):
+            raise ProjectError(f"`{target}` already exists on the server; visor will not clone over it.")
+        cloned = subprocess.run(["git", "clone", "--quiet", self.github_url.format(repo=repo), target],
+                                capture_output=True, text=True, timeout=1800,
+                                env=dict(os.environ, GIT_TERMINAL_PROMPT="0",
+                                         GIT_SSH_COMMAND="ssh -o BatchMode=yes"))
+        if cloned.returncode != 0:
+            raise ProjectError(f"could not clone `{repo}` from GitHub: {cloned.stderr.strip()[-400:]}")
+        tests = (header["tests"] or "").strip()
+        kind = "a Godot project" if _is_godot(target) else "not a Godot project"
+        said = f"Cloned `{repo}` to `{target}`: {kind}."
+        if tests:
+            said += f" Its tests run with `{tests}`."
+        elif not _is_godot(target):
+            said += (" It has no test command, so visor will plan and answer questions on it but not build. "
+                     "To build, make the project again with a `Tests:` line, or ask for one to be added.")
+        return {"source": target, "tests": tests, "model": model}, said
 
     def review_build(self, build_run, project, task_file, rest, log=None):
         """A read-only round on a build's branch, by the reviewer model, asked to check

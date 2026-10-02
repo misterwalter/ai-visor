@@ -142,12 +142,15 @@ class DispatchTest(unittest.TestCase):
 
     def test_the_owners_own_format_parses(self):
         text = "Project: my-game\nAnalysis: Take a look through the regions and score them.\n"
-        self.assertEqual(dispatch.parse_header(text),
+        header = dispatch.parse_header(text)
+        self.assertEqual({k: header[k] for k in ("project", "model", "round", "thinking")},
                          {"project": "my-game", "model": None, "round": "analysis", "thinking": None})
 
     def test_header_keys_are_case_blind_and_the_first_round_word_wins(self):
         text = "project: game\nMODEL: Official\nbuild:\nPlan: not this\n"
-        self.assertEqual(dispatch.parse_header(text), {"project": "game", "model": "Official", "round": "build", "thinking": None})
+        header = dispatch.parse_header(text)
+        self.assertEqual({k: header[k] for k in ("project", "model", "round")},
+                         {"project": "game", "model": "Official", "round": "build"})
 
     def test_the_owners_text_ends_where_visors_first_section_begins(self):
         text = "Project: game\nDo a thing.\n\n---\n\n## Plan, today, official model\n\nA plan.\n"
@@ -252,6 +255,74 @@ class DispatchTest(unittest.TestCase):
         (call,) = self.calls_made()
         self.assertIn("--analysis", call)
         self.assertIn("--notes", call)
+
+    # Making a project from a note
+
+    def make_github(self, repo):
+        """A stand-in for GitHub: a bare repository at the path github_url points to."""
+        github = os.path.join(self.tmp.name, "github")
+        source = os.path.join(self.tmp.name, "seed")
+        os.makedirs(source, exist_ok=True)
+        open(os.path.join(source, "project.godot"), "w").close()
+        run = lambda *a, cwd=None: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t"] + list(a),
+                                                  cwd=cwd, capture_output=True, text=True, check=True)
+        run("init", "-q", cwd=source)
+        run("add", "-A", cwd=source)
+        run("commit", "-qm", "seed", cwd=source)
+        run("clone", "-q", "--bare", source, os.path.join(github, repo + ".git"))
+        text = open(self.config).read().replace("[visor]\n", "[visor]\n"
+            f"repos = {self.tmp.name}/repos\ngithub_owner = someone\ngithub_url = {github}/{{repo}}.git\n", 1)
+        with open(self.config, "w") as f:
+            f.write(text)
+        os.makedirs(os.path.join(self.tmp.name, "repos"), exist_ok=True)
+        return dispatch.Dispatcher(self.config, self.state, now=lambda: self.clock,
+                                   other_run_active=lambda: self.other_run, log=self.logged.append)
+
+    def test_a_note_makes_a_folder_project_that_the_next_note_can_use(self):
+        self.note("inbox", "new.md", "New project: College Class\nGitHub: no\nModel: glimmer\n")
+        self.d.once()
+        self.assertEqual(self.calls_made(), [], "making a project runs no model")
+        self.assertTrue(os.path.isdir(os.path.join(self.tasks, "projects", "College Class")))
+        reply = self.read("your-turn", "new.md")
+        self.assertIn("## Project created", reply)
+        self.assertIn("`Project: College Class`", reply)
+        self.note("inbox", "ch2.md", "Project: College Class\nWrite: chapter two\n")
+        self.d.once()
+        (call,) = self.calls_made()
+        self.assertIn("--folder", call)
+        self.assertEqual(call[2], "glimmer-abliterated", "the model the project was made with")
+        # A restarted dispatcher still knows it.
+        again = dispatch.Dispatcher(self.config, self.state)
+        self.assertIn("College Class", again.projects)
+
+    def test_github_yes_clones_the_repository_of_that_name(self):
+        d = self.make_github("someone/puzzle-game")
+        self.note("inbox", "new.md", "New project: puzzle-game\nGitHub: yes\n")
+        d.once()
+        target = os.path.join(self.tmp.name, "repos", "puzzle-game")
+        self.assertTrue(os.path.exists(os.path.join(target, "project.godot")))
+        self.assertIn("Cloned `someone/puzzle-game`", self.read("your-turn", "new.md"))
+        self.assertEqual(d.projects["puzzle-game"]["source"], target)
+
+    def test_github_can_name_another_repository(self):
+        d = self.make_github("friend/their-game")
+        self.note("inbox", "new.md", "New project: theirs\nGitHub: friend/their-game\nTests: python3 tests.py\n")
+        d.once()
+        self.assertEqual(d.projects["theirs"]["tests"], "python3 tests.py")
+
+    def test_a_project_that_cannot_be_made_comes_back_with_the_reason(self):
+        d = self.make_github("someone/real")
+        self.note("inbox", "a.md", "New project: game\n")
+        self.note("inbox", "b.md", "New project: missing\nGitHub: yes\n")
+        self.note("inbox", "c.md", "New project: x\nGitHub: perhaps\n")
+        self.note("inbox", "d.md", "New project: y\nModel: nonesuch\n")
+        for _ in range(4):
+            d.once()
+        self.assertIn("already a project called `game`", self.read("your-turn", "a.md"))
+        self.assertIn("could not clone `someone/missing`", self.read("your-turn", "b.md"))
+        self.assertIn("`GitHub: perhaps` is not one visor understands", self.read("your-turn", "c.md"))
+        self.assertIn("`Model: nonesuch` is not one visor knows", self.read("your-turn", "d.md"))
+        self.assertNotIn("missing", d.projects)
 
     # Folder projects
 

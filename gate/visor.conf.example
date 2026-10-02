@@ -18,6 +18,13 @@ self_update = yes
 review = no
 # The model that reviews: official or abliterated.
 reviewer = official
+# Projects made from a note ("New project:"): folder projects go here, GitHub
+# projects are cloned into repos, and "GitHub: yes" means this account's
+# repository of the same name. Visor records them in projects.conf beside this
+# file and never rewrites this one.
+# projects_folder = /srv/notes/tasks/projects
+repos = /srv/code
+github_owner = your-github-name
 # Where each run's live log goes (default: logs/ in the notes folder), and how
 # often, in seconds, it is brought up to date.
 # logs = /srv/notes/tasks/logs
