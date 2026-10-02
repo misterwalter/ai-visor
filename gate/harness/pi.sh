@@ -11,7 +11,7 @@
 # Not pi's grep or find: they need ripgrep and fd, which are not installed, and try
 # to download them, which the wall stops. Every call to its grep failed. The shell's
 # own grep and find do the same work.
-if [ "$ROUND" = build ]; then
+if [ "$ROUND" = build ] || [ "$ROUND" = write ]; then
   HARNESS_TOOLS='["bash","edit","read","write"]'
 else
   HARNESS_TOOLS='["bash","ls","read"]'

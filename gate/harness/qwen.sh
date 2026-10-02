@@ -17,7 +17,7 @@ harness_command() {
   excluded="$excluded,web_fetch,web_search,enter_worktree,exit_worktree,record_artifact"
   excluded="$excluded,report_findings,send_message,task_stop,cron_create,cron_delete,cron_list"
   excluded="$excluded,loop_wakeup,read_mcp_resource,zoom_image,monitor"
-  local approval="yolo"; [ "$ROUND" = build ] || approval="plan"
+  local approval="yolo"; [ "$ROUND" = build ] || [ "$ROUND" = write ] || approval="plan"
 
   # The prompt comes first: list-valued flags swallow any bare argument after them.
   # --safe-mode stops the harness acting on files in the project (it will start

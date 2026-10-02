@@ -38,3 +38,9 @@ source = /srv/code/my-godot-game
 [project my-python-tool]
 source = /srv/code/my-python-tool
 tests = python3 tests.py
+
+# A folder project: a plain folder, such as one synced as notes, not a repository.
+# Visor keeps its history outside it and adds its writing beside your files as
+# lettered drafts, never changing a file of yours. Notes ask for Write: rounds.
+[project my-story]
+folder = /srv/notes/stories/my-story

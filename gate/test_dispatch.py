@@ -32,7 +32,7 @@ FAKE_RUNNER = textwrap.dedent('''\
         f.write(json.dumps(args + ["NOTES=" + notes]) + "\\n")
     out = os.path.join(results, run)
     os.makedirs(out)
-    build = "--analysis" not in args and "--plan-only" not in args
+    build = "--analysis" not in args and "--plan-only" not in args and "--write" not in args
     exit_code = int(os.environ.get("FAKE_EXIT", "0"))
     paused = n < int(os.environ.get("FAKE_PAUSES", "0"))
     if paused:
@@ -51,6 +51,8 @@ FAKE_RUNNER = textwrap.dedent('''\
     report += ["- base: abc123", ""]
     if build:
         report += ["## Checks", "", "- **numbers changed:** `x.gd:3`: 80 → 140", ""]
+    if "--write" in args:
+        report += ["## Drafts", "", "- `Chapter4b.md` (draft of `Chapter4a.md`)", ""]
     report += ["## Pull request", "", f"https://example.invalid/pull/{n}" if build and not paused else "none"]
     with open(os.path.join(out, "agent-output.jsonl"), "w") as f:
         f.write(json.dumps({"type": "compaction_end", "result": {"summary": f"Summary from part {n}."}}) + "\\n")
@@ -101,6 +103,9 @@ class DispatchTest(unittest.TestCase):
 
                 [project notests]
                 source = {root}/notests
+
+                [project story]
+                folder = {root}/story
                 """))
         os.environ.update(FAKE_RESULTS=self.results, FAKE_CALLS=self.calls)
         os.environ.pop("FAKE_EXIT", None)
@@ -246,6 +251,51 @@ class DispatchTest(unittest.TestCase):
         (call,) = self.calls_made()
         self.assertIn("--analysis", call)
         self.assertIn("--notes", call)
+
+    # Folder projects
+
+    def test_a_write_round_on_a_folder_writes_drafts_and_lists_them(self):
+        self.note("inbox", "ch5.md", "Project: story\nModel: official\nWrite: chapter five\n")
+        self.d.once()
+        (call,) = self.calls_made()
+        self.assertIn("--write", call)
+        self.assertIn("--folder", call)
+        self.assertNotIn("--continue", call)
+        note = self.read("your-turn", "ch5.md")
+        self.assertIn("## Drafts, ", note)
+        self.assertIn("`Chapter4b.md` (draft of `Chapter4a.md`)", note)
+
+    def test_a_reply_on_a_folder_asks_for_more_writing_from_the_folder_as_it_is(self):
+        self.note("approved", "ch5.md", "Project: story\nModel: official\nWrite: five\n\n---\n\n## Drafts, x\n\nDone.\n\n---\n\n## Your reply\n\nDarker.\n")
+        self.d.once()
+        (call,) = self.calls_made()
+        self.assertIn("--write", call)
+        self.assertNotIn("--continue", call, "the last round's drafts are already in the folder")
+        self.assertIn("Darker.", call[-1])
+
+    def test_a_paused_write_round_carries_on_its_own_branch(self):
+        os.environ.update(FAKE_PAUSES="1", FAKE_SESSION="1")
+        self.note("inbox", "ch5.md", "Project: story\nModel: official\nWrite: five\n")
+        self.d.once()
+        first, second = self.calls_made()
+        self.assertEqual(second[second.index("--continue") + 1], "ch5-coder-official-pi-run0")
+        self.assertEqual(second[second.index("--fork") + 1], "ch5-coder-official-pi-run0")
+
+    def test_build_on_a_folder_and_write_on_a_repository_are_turned_back(self):
+        self.note("inbox", "a.md", "Project: story\nBuild: five\n")
+        self.note("inbox", "b.md", "Project: textgame\nWrite: five\n")
+        self.d.once()
+        self.d.once()
+        self.assertEqual(self.calls_made(), [])
+        self.assertIn("ask for `Write:`", self.read("your-turn", "a.md"))
+        self.assertIn("`Write:` is for folder projects", self.read("your-turn", "b.md"))
+
+    def test_a_project_needs_a_source_or_a_folder_but_not_both(self):
+        text = open(self.config).read().replace("folder = ", "source = /x\nfolder = ")
+        with open(self.config, "w") as f:
+            f.write(text)
+        with self.assertRaises(Exception):
+            dispatch.Dispatcher(self.config, self.state)
 
     # Live logs
 
@@ -442,7 +492,7 @@ class DispatchTest(unittest.TestCase):
         self.note("inbox", "b.md", "Project: game\nModel: gpt\n")
         self.d.once()
         self.d.once()
-        self.assertIn("Known: game, notests, textgame", self.read("your-turn", "a.md"))
+        self.assertIn("Known: game, notests, story, textgame", self.read("your-turn", "a.md"))
         self.assertIn("`Model: gpt`", self.read("your-turn", "b.md"))
 
     def test_a_build_on_a_project_with_no_way_to_test_it_is_refused(self):
@@ -498,7 +548,7 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(header["model"], "both")
         self.assertEqual(header["round"], "plan")
         self.assertEqual(header["project"], "game")
-        self.assertIn("`game`, `notests`, `textgame`", self.d.sample_job())
+        self.assertIn("`game`, `notests`, `story`, `textgame`", self.d.sample_job())
 
     def test_the_sample_and_status_files_are_never_taken_as_tasks(self):
         self.d.once()

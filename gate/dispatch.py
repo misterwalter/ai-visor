@@ -40,7 +40,7 @@ import traceback
 HERE = os.path.dirname(os.path.realpath(__file__))
 REPO = os.path.dirname(HERE)
 
-ROUNDS = ("analysis", "plan", "build")
+ROUNDS = ("analysis", "plan", "build", "write")
 FOLDERS = ("inbox", "approved", "working", "your-turn", "done")
 # Files in the tasks folder that are not tasks.
 NOT_TASKS = {"README.md", "sample-job.md", "STATUS.md"}
@@ -77,9 +77,10 @@ The first lines of a note tell visor what to do. Only `Project:` is required.
 | Line | Meaning | If left out |
 |---|---|---|
 | `Project: <name>` | Which project. Visor knows: {projects}. | The note comes back to you with an error. |
-| `Analysis:` | A question. Visor reads the code, changes nothing, and answers. | |
-| `Plan:` | Visor reads the code, changes nothing, and replies with a plan and questions. | This is the default. |
-| `Build:` | Visor makes the change straight away, on its own branch, and opens a pull request. | |
+| `Analysis:` | A question. Visor reads the project, changes nothing, and answers. | |
+| `Plan:` | Visor reads the project, changes nothing, and replies with a plan and questions. | This is the default. |
+| `Build:` | For a repository: visor makes the change straight away, on its own branch, and opens a pull request. | |
+| `Write:` | For a folder project: visor writes what you ask and adds it beside your files as new drafts, `Chapter4b.md` after `Chapter4a.md`. It never changes or deletes a file of yours. | |
 | `Model: official`, `abliterated` or `both` | Which model does the work. `both` runs it on each, one after the other, and gives you both answers. | `both`, for now. |
 
 The question or request can go on the same line as `Analysis:`, `Plan:` or
@@ -94,8 +95,10 @@ The question or request can go on the same line as `Analysis:`, `Plan:` or
 2. When it has an answer, it adds it to the end of the note, under a new
    heading, and moves the note to `your-turn/`.
 3. To carry on, write under `## Your reply` and move the note to `approved/`.
-   After a plan, that means "build it"; after an answer, it means "look again,
-   with what I said". Visor reads everything in the note, not just where it is.
+   After a plan, that means "build it" (on a folder project, "write it"); after
+   an answer, it means "look again, with what I said"; after drafts, "write
+   again, with what I said". Visor reads everything in the note, not just where
+   it is.
 4. When you are finished with it, move the note to `done/`.
 
 Builds never touch `main`. Each one is pushed to its own `visor/` branch with a
@@ -118,7 +121,7 @@ def parse_header(owner_text):
     """Project, model and round from the note's first lines. Missing ones are None."""
     header = {"project": None, "model": None, "round": None}
     for line in owner_text.splitlines()[:12]:
-        match = re.match(r"^\s*(project|model|analysis|plan|build)\s*:\s*(.*)$", line, re.IGNORECASE)
+        match = re.match(r"^\s*(project|model|analysis|plan|build|write)\s*:\s*(.*)$", line, re.IGNORECASE)
         if match is None:
             continue
         key, value = match.group(1).lower(), match.group(2).strip()
@@ -213,8 +216,11 @@ class Dispatcher:
         for section in parser.sections():
             if section.startswith("project "):
                 name = section[len("project "):].strip()
-                source = parser[section].get("source") or _fail(f"{path}: [{section}] needs source")
-                self.projects[name] = {"source": source, "tests": parser[section].get("tests", "")}
+                source, folder = parser[section].get("source"), parser[section].get("folder")
+                if bool(source) == bool(folder):
+                    _fail(f"{path}: [{section}] needs either source (a repository) or folder (a plain folder)")
+                self.projects[name] = {"source": source or folder, "tests": parser[section].get("tests", ""),
+                                       "folder": bool(folder)}
         for folder in FOLDERS:
             if not os.path.isdir(os.path.join(self.tasks, folder)):
                 raise ConfigError(f"the tasks folder has no {folder}/: {self.tasks}")
@@ -298,12 +304,20 @@ class Dispatcher:
         else:
             return None, [], None, f"`Model: {header['model']}` is not one visor knows: use official, abliterated or both."
 
+        settings = self.projects[header["project"]]
         if came_from == "approved":
-            # A reply to an answer asks for another look; a reply to a plan or a build asks for a build.
-            round_ = "analysis" if header["round"] == "analysis" else "build"
+            # A reply to an answer asks for another look; a reply to a plan or a build asks for a
+            # build, and on a folder for more writing.
+            round_ = "analysis" if header["round"] == "analysis" else ("write" if settings["folder"] else "build")
         else:
             round_ = header["round"] or "plan"
-        if round_ == "build" and not self.projects[header["project"]]["tests"] and not _is_godot(self.projects[header["project"]]["source"]):
+        if round_ == "build" and settings["folder"]:
+            return None, [], None, (f"`{header['project']}` is a folder, not a repository: ask for `Write:` "
+                                    "rather than `Build:`.")
+        if round_ == "write" and not settings["folder"]:
+            return None, [], None, (f"`{header['project']}` is a repository: ask for `Build:` there. `Write:` "
+                                    "is for folder projects.")
+        if round_ == "build" and not settings["tests"] and not _is_godot(settings["source"]):
             return None, [], None, (f"`{header['project']}` has no test command in visor's settings, and a build "
                                     "needs one. Ask for a plan or an analysis, or add `tests =` for it.")
         return round_, models, header["project"], None
@@ -341,7 +355,9 @@ class Dispatcher:
                                     "log": log}
                 self.save_state(state)
                 self.write_status()
-                flags = {"analysis": ["--analysis"], "plan": ["--plan-only"], "build": []}[round_]
+                flags = {"analysis": ["--analysis"], "plan": ["--plan-only"], "build": [], "write": ["--write"]}[round_]
+                if self.projects[project]["folder"]:
+                    flags += ["--folder"]
                 if fork:
                     # The task and the discussion are in the conversation it carries on.
                     flags += ["--fork", fork]
@@ -351,6 +367,10 @@ class Dispatcher:
                         flags += ["--notes", part_notes]
                 if round_ == "build" and state["last_build"].get(model):
                     flags += ["--continue", state["last_build"][model]]
+                elif round_ == "write" and parts:
+                    # Writing carries on its branch only across a pause: once a round ends, its drafts
+                    # are in the folder, and the next round starts from the folder as it is.
+                    flags += ["--continue", parts[-1]]
                 if self.projects[project]["tests"]:
                     flags += ["--tests", self.projects[project]["tests"]]
                 flags += ["--live-log", log]
@@ -553,7 +573,7 @@ class Dispatcher:
         return result
 
     def _section(self, round_, model, run_name, exit_code, result, parts=None, log=None):
-        title = {"analysis": "Answer", "plan": "Plan", "build": "Build"}[round_]
+        title = {"analysis": "Answer", "plan": "Plan", "build": "Build", "write": "Drafts"}[round_]
         lines = [f"## {title}, {_stamp()}, {model} model", ""]
         if not run_name:
             lines += [f"The run did not start (exit {exit_code}). The dispatcher's log on the server says why.", ""]
@@ -571,6 +591,9 @@ class Dispatcher:
             lines += [f"> {failed.group(0)}", ""]
             stopped = re.findall(r"^Stopped .*$", result["report"], re.MULTILINE)
             lines += [f"> {s}" for s in stopped] + ([""] if stopped else [])
+        drafts = re.search(r"^## Drafts\s+(.*?)(?=\n## |\Z)", result["report"], re.MULTILINE | re.DOTALL)
+        if drafts:
+            lines += ["Drafts:", "", drafts.group(1).strip(), ""]
         lines += [result["message"] or "(The agent left no closing message.)", ""]
         return "\n".join(lines)
 

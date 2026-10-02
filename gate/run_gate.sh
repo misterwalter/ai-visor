@@ -5,9 +5,14 @@
 #   run_gate.sh <repo> <task.md> <model> <harness> [options]
 #
 # <repo>        a local clone of the project to work on; each run copies it afresh
+#               (with --folder, a plain folder instead, such as one synced as notes)
 # <harness>     the agent loop to use: qwen or pi (see harness/)
 # --plan-only   the agent may read but not edit; its plan and questions are the output
 # --analysis    the agent may read but not edit; its answer to the task is the output
+# --write       write prose into a folder project; what it writes comes back as drafts
+# --folder      <repo> is a plain folder, not a repository. Visor keeps the folder's
+#               history itself (folders.py); a run never writes to the folder except
+#               to add drafts when it finishes, and never overwrites a file there
 # --notes FILE  the owner's replies from an earlier round, appended to the prompt
 # --continue RUN  start from the branch an earlier run left, instead of from main
 # --fork RUN    carry on the conversation of RUN, an earlier part of this round that
@@ -19,11 +24,13 @@ set -u
 
 REPO_SRC="$(realpath "${1:?repo required}")"; TASK="$(realpath "${2:?task file required}")"
 MODEL="${3:?model required}"; HARNESS="${4:?harness required: qwen or pi}"; shift 4
-ROUND="build"; NOTES=""; CONTINUE=""; FORK=""; TESTS=""; LIVE_LOG=""
+ROUND="build"; NOTES=""; CONTINUE=""; FORK=""; TESTS=""; LIVE_LOG=""; FOLDER=no
 while [ $# -gt 0 ]; do
   case "$1" in
     --plan-only) ROUND="plan" ;;
     --analysis) ROUND="analysis" ;;
+    --write) ROUND="write" ;;
+    --folder) FOLDER=yes ;;
     --notes) NOTES="$(realpath "$2")"; shift ;;
     --continue) CONTINUE="$2"; shift ;;
     --fork) FORK="$2"; shift ;;
@@ -55,6 +62,14 @@ mkdir -p "$OUT/harness-log" /srv/code/work
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 
 say "run $RUN  ($ROUND round)"
+if [ "$ROUND" = write ] && [ "$FOLDER" != yes ]; then
+  say "a write round is for a folder project (--folder); a repository takes a build round"; exit 2
+fi
+if [ "$ROUND" = build ] && [ "$FOLDER" = yes ]; then
+  say "a folder project takes a write round (--write), not a build"; exit 2
+fi
+# Rounds that change files: their work is committed, and for a folder delivered as drafts.
+case "$ROUND" in build|write) WRITES=yes ;; *) WRITES=no ;; esac
 
 # The live log, for the owner to read while the run goes: a heading now, the
 # agent's work as it happens, the outcome at the end.
@@ -97,8 +112,17 @@ done
 # The system allows a socket's path 107 characters, and the doors' names take 11.
 [ "${#WALL}" -le 90 ] || { say "the task name is too long for a socket path: $WALL"; exit 1; }
 
-git -C "$REPO_SRC" pull --quiet --ff-only origin main || say "WARNING: could not update $REPO_SRC"
-git clone --quiet "$REPO_SRC" "$WORK" || { say "clone failed"; exit 1; }
+if [ "$FOLDER" = yes ]; then
+  # Visor's own history of the folder, brought up to date first: the run clones that,
+  # so it starts from the folder exactly as the owner left it.
+  HISTORY="$(python3 "$HERE/folders.py" snapshot "$REPO_SRC" 2> "$OUT/folder.log")" \
+    || { say "could not record the folder $REPO_SRC -- see $OUT/folder.log"; exit 1; }
+  CLONE_FROM="$HISTORY"
+else
+  git -C "$REPO_SRC" pull --quiet --ff-only origin main || say "WARNING: could not update $REPO_SRC"
+  CLONE_FROM="$REPO_SRC"
+fi
+git clone --quiet "$CLONE_FROM" "$WORK" || { say "clone failed"; exit 1; }
 cd "$WORK" || exit 1
 if [ -n "$CONTINUE" ]; then
   # A further round on an earlier run's work: its branch lives in that run's workspace.
@@ -132,11 +156,14 @@ RULES=""
 for f in AGENTS.md CLAUDE.md; do
   [ -f "$f" ] && { RULES="$WORK/$f"; break; }
 done
-[ -n "$RULES" ] || say "WARNING: no AGENTS.md or CLAUDE.md -- the agent gets no project rules"
+[ -n "$RULES" ] || [ "$FOLDER" = yes ] || say "WARNING: no AGENTS.md or CLAUDE.md -- the agent gets no project rules"
 
 # What kind of project: Godot gets the import step, the test door and its own
 # instructions; anything else runs the test command it was given, inside the wall.
-if [ -f "$WORK/project.godot" ]; then
+if [ "$FOLDER" = yes ]; then
+  KIND="folder"
+  ENGINE="a folder of notes"
+elif [ -f "$WORK/project.godot" ]; then
   KIND="godot"
   command -v flatpak > /dev/null || { say "missing program: flatpak"; exit 1; }
   ENGINE="godot $(godot-headless "$WORK" --version 2>/dev/null | tail -1)"
@@ -151,13 +178,13 @@ else
   fi
 fi
 
-if [ "$ROUND" = build ]; then ACCESS="rw"; else ACCESS="ro"; fi
+if [ "$WRITES" = yes ]; then ACCESS="rw"; else ACCESS="ro"; fi
 
 # Standing instructions go in the system prompt, because a harness keeps that
 # whole when it summarises a long conversation. The first message does not
 # survive a summary, and an agent that has lost the test command invents one.
 {
-  cat "$HERE/system-prompt.md"
+  if [ "$KIND" = folder ]; then cat "$HERE/system-prompt-folder.md"; else cat "$HERE/system-prompt.md"; fi
   echo
   cat "$HERE/system-prompt-$ROUND.md"
   if [ "$KIND" = godot ] && [ "$ROUND" = build ]; then
@@ -169,7 +196,7 @@ if [ "$ROUND" = build ]; then ACCESS="rw"; else ACCESS="ro"; fi
   fi
   echo
   echo "# This project"
-  echo "The repository is at $WORK ($ENGINE)."
+  if [ "$KIND" = folder ]; then echo "The folder is at $WORK."; else echo "The repository is at $WORK ($ENGINE)."; fi
   if [ -n "$RULES" ]; then
     echo "Its own rules follow, from $(basename "$RULES"). Obey them."
     echo
@@ -181,7 +208,7 @@ if [ -n "$FORK" ]; then
   {
     echo "You were paused so that the model could be restarted. Nothing went wrong."
     echo "Carry on from where you stopped; do not start again."
-    echo "The repository is now at $WORK, with the same files$([ "$ROUND" = build ] && echo ", including everything you committed")."
+    echo "The $([ "$KIND" = folder ] && echo folder || echo repository) is now at $WORK, with the same files$([ "$WRITES" = yes ] && echo ", including everything you wrote")."
     echo "Paths above that begin /srv/code/work/$FORK now begin $WORK."
   } > "$OUT/prompt.txt"
 else
@@ -433,9 +460,11 @@ harness_final_message > "$OUT/final-message.md" 2> /dev/null
 [ -s "$OUT/final-message.md" ] || say "WARNING: the agent left no closing message"
 
 AFTER="n/a"; PUSHED="nothing to push"; PULL_REQUEST="none"
-if [ "$ROUND" = build ]; then
-  say "tests after"
-  run_tests > "$OUT/tests-after.log" 2>&1; AFTER=$?
+if [ "$WRITES" = yes ]; then
+  if [ "$ROUND" = build ]; then
+    say "tests after"
+    run_tests > "$OUT/tests-after.log" 2>&1; AFTER=$?
+  fi
   close_doors
   git add -A
   git diff --cached --stat > "$OUT/diffstat.txt"
@@ -446,7 +475,15 @@ if [ "$ROUND" = build ]; then
        -m "visor gate: $NAME ($MODEL, $HARNESS)" \
        -m "Written by an agent and not yet reviewed.${PAUSED:+ Paused, not finished: $PAUSED.}
 agent exit: $AGENT   tests before: exit $BEFORE   tests after: exit $AFTER"; then
-    if "$HERE/push_result.sh" "$REPO_SRC" "$WORK" > "$OUT/push.log" 2>&1; then
+    if [ "$KIND" = folder ]; then
+      # No remote: the branch goes into visor's history of the folder.
+      if git --git-dir="$HISTORY" fetch --quiet "$WORK" "visor/$RUN:visor/$RUN" 2> "$OUT/push.log"; then
+        PUSHED="yes, into visor's history of the folder, as visor/$RUN"
+      else
+        PUSHED="NO -- $(tail -1 "$OUT/push.log")"
+        say "COULD NOT KEEP THE WORK IN THE FOLDER'S HISTORY -- see $OUT/push.log"
+      fi
+    elif "$HERE/push_result.sh" "$REPO_SRC" "$WORK" > "$OUT/push.log" 2>&1; then
       PUSHED="yes, as visor/$RUN"
       # A paused part gets no pull request of its own: the part that finishes
       # opens one, and its branch holds every part's commits.
@@ -458,7 +495,17 @@ agent exit: $AGENT   tests before: exit $BEFORE   tests after: exit $AFTER"; the
   else
     say "nothing to commit"
   fi
-  python3 "$HERE/checks.py" "$WORK" "$START" > "$OUT/checks.md" 2>&1
+  [ "$ROUND" = build ] && python3 "$HERE/checks.py" "$WORK" "$START" > "$OUT/checks.md" 2>&1
+  if [ "$KIND" = folder ]; then
+    # A paused part delivers nothing: the part that finishes delivers what all of them wrote.
+    if [ -n "$PAUSED" ]; then
+      echo "- nothing yet: the round was paused, and its last part delivers the drafts" > "$OUT/drafts.md"
+    else
+      python3 "$HERE/folders.py" deliver "$WORK" "$REPO_SRC" > "$OUT/drafts.md" 2>&1 \
+        || say "DRAFTS NOT DELIVERED -- see $OUT/drafts.md"
+      say "drafts: $(grep -c '^- `' "$OUT/drafts.md") delivered to $REPO_SRC"
+    fi
+  fi
 else
   close_doors
 fi
@@ -503,10 +550,18 @@ fi
   echo "- pushed: $PUSHED"
   [ -n "$PAUSED" ] && echo "- paused: yes"
   echo
-  if [ "$ROUND" = build ]; then
+  if [ "$KIND" = folder ] && [ "$WRITES" = yes ]; then
+    echo "## Drafts"
+    echo
+    cat "$OUT/drafts.md"
+    echo
+  fi
+  if [ "$WRITES" = yes ]; then
     echo "## Files changed"
     echo '```'; cat "$OUT/diffstat.txt" 2>/dev/null; echo '```'
     echo
+  fi
+  if [ "$ROUND" = build ]; then
     echo "## Checks"
     echo
     echo "Found by reading this run's diff, not from the agent's report. Each is a"
@@ -546,6 +601,9 @@ if [ -n "$LIVE_LOG" ]; then
   live_note "
 *$(date +%H:%M)* $OUTCOME · $(( (T1-T0)/60 )) minutes · $(answered | wc -l) model calls$([ "$ROUND" = build ] && echo " · tests after: exit $AFTER · pull request: $PULL_REQUEST")
 "
+  if [ -f "$OUT/drafts.md" ]; then live_note "Drafts:
+$(cat "$OUT/drafts.md")
+"; fi
 fi
 echo "GATE_RUN_DONE"
 # 75 is the usual code for "try again later": the dispatcher reads it as a pause.

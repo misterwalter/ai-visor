@@ -19,6 +19,8 @@ agent, tests before and after, and a report.
 | `test_dispatch.py` | Its tests: `python3 gate/test_dispatch.py`. No model or Godot needed. |
 | `checks.py` | Reads a build's diff for what a reviewer should look at; its findings go in the report. |
 | `test_checks.py` | Its tests: `python3 gate/test_checks.py`. |
+| `livelog.py` | Writes a readable log of a run into the notes folder as it goes. Tests: `test_livelog.py`. |
+| `folders.py` | Folder projects: keeps a plain folder's history, and delivers a run's writing back as drafts. Tests: `test_folders.py`. |
 | `visor.conf.example` | The dispatcher's settings, to copy to `~/.config/visor/visor.conf`. |
 | `run_gate.sh` | One run: fresh clone, new branch, baseline tests, agent, tests again, report. |
 | `watch_run.sh` | Prints one status line a minute until a run finishes. |
@@ -28,8 +30,9 @@ agent, tests before and after, and a report.
 | `doors/model-door.py` | The one way from the sandbox to the model. Passes chat requests, refuses the rest, records every call. |
 | `doors/godot-door` | The one way from the sandbox to Godot. Accepts four requests. |
 | `inside/` | The programs the agent finds inside the sandbox: `gut-test`, `godot-check`, `godot-import`, the self-check, and a `godot` that explains what to use in its place. |
-| `system-prompt.md` | The agent's standing instructions, kept short on purpose. |
-| `system-prompt-build.md`, `system-prompt-plan.md`, `system-prompt-analysis.md` | What is added for each kind of round. |
+| `system-prompt.md` | The agent's standing instructions for a repository, kept short on purpose. |
+| `system-prompt-folder.md` | The same for a folder project: a writer's, with the drafts rule. |
+| `system-prompt-build.md`, `system-prompt-write.md`, `system-prompt-plan.md`, `system-prompt-analysis.md` | What is added for each kind of round. |
 | `system-prompt-godot.md` | What a build round on a Godot project adds: the check commands, and Godot 3 habits to avoid. |
 | `harness/qwen.sh`, `harness/pi.sh` | How each agent loop is started, and the tools it may offer. |
 | `qwen-settings.json` | Settings for Qwen Code. |
@@ -168,6 +171,10 @@ Options for `run_gate.sh`:
   read-only. Its output is a plan and questions.
 - `--analysis` the same, but the output is an answer: a question about the code,
   or advice on it, with file and line references and code samples.
+- `--folder` the project is a plain folder, such as one synced as notes, not a
+  repository. See "Folder projects" below.
+- `--write` a writing round, for a folder project: the agent writes, and what it
+  wrote comes back into the folder as drafts.
 - `--notes FILE` the owner's replies to an earlier round, added to the prompt.
 - `--continue RUN` start from the branch an earlier run left, instead of from
   `main`, for a further round on the same work. `RUN` is the earlier run's name.
@@ -207,6 +214,31 @@ Environment variables:
 
 The run refuses to start if the project has no `main` branch or if the sandbox
 fails its self-check.
+
+## Folder projects
+
+A project can be a plain folder instead of a repository: a story kept in the
+notes, say. In the settings it has `folder =` where a repository has `source =`.
+
+- **History.** Before each run, `folders.py snapshot` records the folder as it
+  is, the owner's own edits included, in a git repository visor keeps outside
+  the folder, in `/srv/code/folders/` (`VISOR_FOLDERS`). Nothing is added to the
+  folder, and hidden files such as `.obsidian/` are left out. A run clones that
+  history like any repository, and its commits go back into it as `visor/<run>`.
+- **Drafts, never overwrites.** When a writing round ends, `folders.py deliver`
+  copies back what the run wrote. A new file is copied as it is. A file the run
+  changed is copied as the next draft beside the original: `Chapter4a.md`
+  becomes `Chapter4b.md`, `Chapter4.md` becomes `Chapter4a.md`, and a name not
+  ending in a number gets a spaced letter, `Story Bible a.md`. A name the owner
+  took meanwhile is skipped for the next letter. A file the run deleted is left
+  alone. The run's report and the note list what was delivered.
+- **Rounds.** `Write:`, `Analysis:` and `Plan:`. A folder takes no `Build:`, and
+  a repository no `Write:`. A reply to drafts asks for another writing round,
+  which starts from the folder as it is then, the earlier drafts included.
+- **Pauses.** A paused part delivers nothing; the next carries on its branch, and
+  the part that finishes delivers what all of them wrote.
+- The agent gets writer's instructions (`system-prompt-folder.md` and
+  `system-prompt-write.md`), and no tests run.
 
 ## Running the tests yourself
 
