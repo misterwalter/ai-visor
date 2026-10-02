@@ -21,7 +21,12 @@ model would give. Ollama itself says nothing: it quietly drops the start of the
 conversation, the task included, and the model answers without it. The error
 lets the harness summarise and try again, or stop, rather than carry on blind.
 
-Usage: model-door.py <socket path> <upstream host:port> <model> <calls file> [window]
+A model that thinks by default, as Muse-Glimmer does, thinks hardest when a
+request names no reasoning level, and the harness names none when the run asked
+for no thinking. Given a default level, the door adds it to a request that has
+none, so that "no thinking" means none.
+
+Usage: model-door.py <socket path> <upstream host:port> <model> <calls file> [window [reasoning]]
 """
 
 import http.client
@@ -55,6 +60,7 @@ class Door(http.server.BaseHTTPRequestHandler):
     upstream = None  # (host, port), set in main
     model = None
     window = 0         # the model's context window in tokens; 0 = do not check
+    reasoning = None   # a reasoning level to add to a request that names none
     calls_file = None
     calls_lock = threading.Lock()
     last_move = None   # the agent's latest tool calls, as text
@@ -125,6 +131,12 @@ class Door(http.server.BaseHTTPRequestHandler):
         entry = {"time": time.strftime("%H:%M:%S"), "messages": messages, "tools": tools,
                  "repeats": repeats, "request_bytes": len(body), "status": None,
                  "prompt_tokens": None, "completion_tokens": None, "seconds": None}
+        if self.reasoning and asked_model is not None and "reasoning_effort" not in request:
+            request["reasoning_effort"] = self.reasoning
+            body = json.dumps(request).encode()
+            entry["reasoning"] = f"{self.reasoning}, added by the door"
+        elif request.get("reasoning_effort"):
+            entry["reasoning"] = request["reasoning_effort"]
         estimate = int(len(body) / BYTES_PER_TOKEN)
         if self.window and estimate > self.window:
             entry.update(status="too long", prompt_tokens=estimate, seconds=0)
@@ -192,10 +204,11 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 
 
 def main():
-    if len(sys.argv) not in (5, 6):
+    if len(sys.argv) not in (5, 6, 7):
         sys.exit(__doc__)
     path, upstream, model, calls_file = sys.argv[1:5]
-    Door.window = int(sys.argv[5]) if len(sys.argv) == 6 else 0
+    Door.window = int(sys.argv[5]) if len(sys.argv) >= 6 else 0
+    Door.reasoning = sys.argv[6] if len(sys.argv) == 7 else None
     host, _, port = upstream.rpartition(":")
     if not host or not port.isdigit():
         sys.exit(f"model-door: upstream must be host:port, got {upstream!r}")

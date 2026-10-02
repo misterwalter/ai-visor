@@ -236,7 +236,15 @@ mkdir -m 700 "$WALL" || { say "could not create $WALL"; exit 1; }
 # The model's context window, as it is loaded (num_ctx in its Modelfile).
 WINDOW="$(ollama show "$MODEL" --parameters 2>/dev/null | awk '$1 == "num_ctx" {print $2}')"
 [ -n "$WINDOW" ] || { say "could not read the context window of $MODEL"; exit 1; }
-python3 "$HERE/doors/model-door.py" "$WALL/model.sock" "$MODEL_SERVER" "$MODEL" "$CALLS" "$WINDOW" \
+# A model that can think does so by default, hardest when no level is named. A run that
+# asked for no thinking has the door name "none" for it.
+DOOR_REASONING=()
+if [ -z "$THINKING" ] && jq -e --arg m "$MODEL" \
+     '.providers.ollama.models[] | select(.id == $m) | .compat.supportsReasoningEffort == true' \
+     "$HERE/pi/models.json" > /dev/null 2>&1; then
+  DOOR_REASONING=(none)
+fi
+python3 "$HERE/doors/model-door.py" "$WALL/model.sock" "$MODEL_SERVER" "$MODEL" "$CALLS" "$WINDOW" "${DOOR_REASONING[@]}" \
   2> "$OUT/model-door.log" &
 MODEL_DOOR=$!
 # -t is how long socat keeps a connection open for the answer once the request

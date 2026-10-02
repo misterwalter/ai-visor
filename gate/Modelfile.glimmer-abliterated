@@ -4,6 +4,13 @@
 # the coders': a dense 30B model reads slowly on this machine, and a longer
 # conversation would take hours to re-read after a pause.
 FROM hf.co/bartowski/darkc0de_Muse-Glimmer-30B-heretic-GGUF:Q4_K_M
+# Ollama's own handling of this model's reply format, thinking and tool calls, as
+# its library copy of Muse-Glimmer uses. Left to guess from the file, Ollama made
+# a template whose stop words ended every reply after its first three tokens.
+RENDERER glimmer
+PARSER glimmer
+# Replaces the stop words inherited from the file: only the end of a turn.
+PARAMETER stop "<|eot|>"
 PARAMETER num_ctx 65536
 PARAMETER temperature 1.0
 PARAMETER top_p 0.95
