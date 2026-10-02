@@ -8,6 +8,7 @@ Godot, no network.
 
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import dispatch  # noqa: E402
@@ -255,6 +257,83 @@ class DispatchTest(unittest.TestCase):
         (call,) = self.calls_made()
         self.assertIn("--analysis", call)
         self.assertIn("--notes", call)
+
+    # Media jobs: a fixed program on the note's inputs, no agent and no project
+
+    def made(self, job, name, data=b"x"):
+        path = os.path.join(job, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    def test_a_recording_attached_to_a_note_is_transcribed_into_it(self):
+        with open(os.path.join(self.tasks, "inbox", "memo.m4a"), "wb") as f:
+            f.write(b"audio")
+        self.note("inbox", "memo.md", "Transcribe:\nLanguage: en\n\n![[memo.m4a]]\n")
+        seen = {}
+        def fake(settings, audio, job, language):
+            seen.update(audio=audio, language=language)
+            return {"text": "Hello, this is the memo.", "seconds": 90}
+        with mock.patch.object(dispatch.media, "transcribe", fake):
+            self.d.once()
+        self.assertEqual(self.calls_made(), [], "no agent run")
+        self.assertTrue(seen["audio"].endswith(os.path.join("inbox", "memo.m4a")))
+        self.assertEqual(seen["language"], "en")
+        note = self.read("your-turn", "memo.md")
+        self.assertIn("## Transcript, ", note)
+        self.assertIn("`memo.m4a` · 1.5 minutes of audio", note)
+        self.assertIn("Hello, this is the memo.", note)
+
+    def test_only_files_inside_the_tasks_folder_are_read(self):
+        outside = os.path.join(self.tmp.name, "private.m4a")
+        open(outside, "wb").close()
+        self.note("inbox", "memo.md", "Transcribe:\n\n![[../../private.m4a]]\n![[private.m4a]]\n")
+        with mock.patch.object(dispatch.media, "transcribe", side_effect=AssertionError("must not run")):
+            self.d.once()
+        self.assertIn("there is no audio to transcribe", self.read("your-turn", "memo.md"))
+
+    def test_an_embedded_chapter_is_read_aloud_and_the_audio_embedded(self):
+        story = os.path.join(self.tasks, "projects", "Story")
+        os.makedirs(story)
+        with open(os.path.join(story, "Chapter2a.md"), "w") as f:
+            f.write("# Chapter 2\n\nThe **boat** comes in.\n")
+        self.note("inbox", "read.md", "Speak:\nVoice: bf_emma\n\n![[Chapter2a.md]]\n")
+        seen = {}
+        def fake(settings, text, job, voice, speed, language):
+            seen.update(text=text, voice=voice, language=language)
+            return {"files": [self.made(job, "speech.mp3")], "seconds": 30}
+        with mock.patch.object(dispatch.media, "speak", fake):
+            self.d.once()
+        self.assertEqual(seen, {"text": "Chapter 2\n\nThe boat comes in.", "voice": "bf_emma", "language": "en-gb"})
+        note = self.read("your-turn", "read.md")
+        self.assertIn("![[read audio 1.mp3]]", note)
+        self.assertTrue(os.path.exists(os.path.join(self.tasks, "media", "read audio 1.mp3")))
+
+    def test_images_are_drawn_from_the_prompt_and_embedded(self):
+        self.note("inbox", "pic.md", "Image: a lighthouse at dusk\nModel: pony\nCount: 2\n\nrain, wide shot\n")
+        seen = {}
+        def fake(settings, options, job):
+            seen.update(options)
+            spec = {"name": "pony", "width": 1024, "height": 1024, "steps": 8, "fast": True, "seed": 7}
+            return {"files": [self.made(job, "a.png"), self.made(job, "b.png")], "spec": spec}
+        with mock.patch.object(dispatch.media, "generate", fake):
+            self.d.once()
+        self.assertEqual(seen["prompt"], "a lighthouse at dusk rain, wide shot")
+        self.assertEqual((seen["model"], seen["count"]), ("pony", "2"))
+        note = self.read("your-turn", "pic.md")
+        self.assertIn("`pony` · 1024×1024 · 8 steps with DMD2 · seed 7", note)
+        self.assertIn("![[pic image 1.png]]", note)
+        self.assertIn("![[pic image 2.png]]", note)
+
+    def test_a_media_job_that_fails_says_why_and_keeps_its_files(self):
+        self.note("inbox", "pic.md", "Image: a fox\n")
+        with mock.patch.object(dispatch.media, "generate", side_effect=dispatch.media.MediaError("ComfyUI stopped")):
+            self.d.once()
+        note = self.read("your-turn", "pic.md")
+        self.assertIn("## Visor could not draw this", note)
+        self.assertIn("ComfyUI stopped", note)
+        kept = re.search(r"kept in `([^`]+)`", note).group(1)
+        self.assertTrue(os.path.isdir(kept))
 
     # Making a project from a note
 

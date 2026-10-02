@@ -20,6 +20,7 @@ agent, tests before and after, and a report.
 | `checks.py` | Reads a build's diff for what a reviewer should look at; its findings go in the report. |
 | `test_checks.py` | Its tests: `python3 gate/test_checks.py`. |
 | `livelog.py` | Writes a readable log of a run into the notes folder as it goes. Tests: `test_livelog.py`. |
+| `media.py`, `media_wall.sh`, `media/speak.py` | Transcription, speech and images: fixed programs, walled in. Tests: `test_media.py`. |
 | `folders.py` | Folder projects: keeps a plain folder's history, and delivers a run's writing back as drafts. Tests: `test_folders.py`. |
 | `visor.conf.example` | The dispatcher's settings, to copy to `~/.config/visor/visor.conf`. |
 | `run_gate.sh` | One run: fresh clone, new branch, baseline tests, agent, tests again, report. |
@@ -217,6 +218,29 @@ Environment variables:
 
 The run refuses to start if the project has no `main` branch or if the sandbox
 fails its self-check.
+
+## Transcription, speech and images
+
+`media.py` runs three fixed programs, never an agent, each walled in by
+`media_wall.sh`: no network, nothing of the account's, only its own program, its
+models, and the job's scratch folder (`~/.local/state/visor/media/<job>/`).
+
+- `Transcribe:` converts the attached recording with ffmpeg and transcribes it
+  with whisper.cpp (large-v3-turbo), starting it on a verbatim example so that it
+  does not soften swearing.
+- `Speak:` strips the Markdown from the text and reads it with Kokoro
+  (`media/speak.py`, in Kokoro's own Python), then ffmpeg makes an MP3.
+- `Image:` builds a ComfyUI workflow from built-in nodes only and runs ComfyUI
+  for that one job, with `--disable-all-custom-nodes --disable-api-nodes`, never
+  `--enable-manager`, and only `.safetensors` weights. It listens on a port inside
+  the wall, and socat joins that to a socket in the job folder. SDXL models take
+  the DMD2 add-on (8 steps rather than 30) unless the note asks for `Quality: full`.
+
+The dispatcher frees the model server's memory first, reads attachments only from
+inside `tasks/`, copies results into `tasks/media/`, and keeps a failed job's
+folder for diagnosis. The tools' paths are in the `[media]` section of the
+settings (see `visor.conf.example`). `test_media.py` runs each step with
+stand-ins for the tools, through the real wall, ffmpeg and socat.
 
 ## Making a project from a note
 

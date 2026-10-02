@@ -32,15 +32,27 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
 import traceback
+import urllib.parse
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 REPO = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+import livelog  # noqa: E402
+import media  # noqa: E402
 
 ROUNDS = ("analysis", "plan", "build", "write")
+# Jobs for a fixed program rather than an agent (media.py). They need no project.
+MEDIA_ROUNDS = ("transcribe", "speak", "image")
+# The header lines a note may have, other than the rounds.
+HEADER_KEYS = ("project", "model", "thinking", "new project", "github", "tests",
+               "voice", "speed", "language", "size", "count", "steps", "seed", "negative", "quality")
+HEADER_RE = re.compile(r"^\s*(" + "|".join(k.replace(" ", r"\s+") for k in HEADER_KEYS + ROUNDS + MEDIA_ROUNDS)
+                       + r")\s*:\s*(.*)$", re.IGNORECASE)
 FOLDERS = ("inbox", "approved", "working", "your-turn", "done")
 # Files in the tasks folder that are not tasks.
 NOT_TASKS = {"README.md", "sample-job.md", "STATUS.md"}
@@ -119,6 +131,22 @@ A note whose first line is `New project:` makes one, and runs no model:
 | `Tests: <command>` | How to run the tests of a repository that is not Godot, so visor can build on it. |
 
 Visor answers in the note: made, and where; or why not.
+
+## Transcription, speech and images
+
+These need no `Project:` line. What they make goes in `tasks/media/` and is
+embedded in the reply. Attachments must be somewhere in `tasks/`: in Obsidian,
+set Settings, Files and links, Default location for new attachments, to "Same
+folder as current file".
+
+| Note says | What visor does |
+|---|---|
+| `Transcribe:` with a recording attached (`![[memo.m4a]]`) | Adds the transcript to the note. `Language: en` if the language is known. |
+| `Speak:` with text below, or a note embedded (`![[Chapter2a.md]]`) | Reads it aloud into an MP3. `Voice:` (default `af_heart`; `bf_emma`, `am_michael`, `bm_george` and others), `Speed:` (1.0). |
+| `Image: <prompt>`, more prompt below if wanted | Draws it. `Model:` is the image model: `lustify` (default), `big-lust`, `pony`, `noobai`, `realistic-vision`. `Size: 832x1216`, `Count: 2`, `Seed:`, `Negative:`, `Quality: full` for more steps, slower. |
+
+Each runs walled in with no network, and all of them take time on this
+machine: minutes for an image, about real time for a recording.
 """
 
 
@@ -139,19 +167,25 @@ THINKING = {"no": None, "off": None, "yes": "medium", "on": "medium", "low": "lo
 
 def parse_header(owner_text):
     """Project, model, round and thinking from the note's first lines. Missing ones are None."""
-    header = {"project": None, "model": None, "round": None, "thinking": None,
-              "new project": None, "github": None, "tests": None}
+    header = dict.fromkeys(HEADER_KEYS + ("round", "round text"))
     for line in owner_text.splitlines()[:12]:
-        match = re.match(r"^\s*(project|model|thinking|new\s+project|github|tests|analysis|plan|build|write)\s*:\s*(.*)$",
-                         line, re.IGNORECASE)
+        match = HEADER_RE.match(line)
         if match is None:
             continue
         key, value = re.sub(r"\s+", " ", match.group(1).lower()), match.group(2).strip()
-        if key in ROUNDS:
-            header["round"] = header["round"] or key
+        if key in ROUNDS + MEDIA_ROUNDS:
+            if not header["round"]:
+                header["round"], header["round text"] = key, value
         elif not header[key]:
             header[key] = value
     return header
+
+
+def note_body(owner_text):
+    """The owner's text without its header lines."""
+    lines = owner_text.splitlines()
+    kept = [line for i, line in enumerate(lines) if not (i < 12 and HEADER_RE.match(line))]
+    return "\n".join(kept).strip()
 
 
 def slug(filename):
@@ -247,6 +281,9 @@ class Dispatcher:
         self.repos = visor.get("repos", "/srv/code")
         self.github_owner = visor.get("github_owner")
         self.github_url = visor.get("github_url", "git@github.com:{repo}.git")
+        # Media jobs: their tools, and where what they make goes in the notes.
+        self.media = media.Settings(parser["media"] if parser.has_section("media") else None, self.state_dir)
+        self.media_folder = visor.get("media_folder", os.path.join(self.tasks, "media"))
         self.projects = {}
         self._add_projects(parser, path)
         if os.path.exists(self.created_path):
@@ -393,10 +430,15 @@ class Dispatcher:
         """Take one note: run it, reply in it, hand it back. Returns a line for the log."""
         name = os.path.basename(path)
         with open(path, encoding="utf-8") as f:
-            if parse_header(split_note(f.read())[0])["new project"] is not None:
-                if dry_run:
-                    return f"would create the project asked for in {name}"
-                return self.create_project(path)
+            header = parse_header(split_note(f.read())[0])
+        if header["new project"] is not None:
+            if dry_run:
+                return f"would create the project asked for in {name}"
+            return self.create_project(path)
+        if header["round"] in MEDIA_ROUNDS:
+            if dry_run:
+                return f"would run a {header['round']} job for {name}"
+            return self.media_job(path)
         round_, models, project, error = self.plan_for(path)
         if dry_run:
             if error:
@@ -576,6 +618,144 @@ class Dispatcher:
             said += (" It has no test command, so visor will plan and answer questions on it but not build. "
                      "To build, make the project again with a `Tests:` line, or ask for one to be added.")
         return {"source": target, "tests": tests, "model": model}, said
+
+    # Media jobs
+
+    def media_job(self, path):
+        """Transcribe, speak or draw: run the tool on the note's inputs, put what it made
+        in the media folder, and reply in the note."""
+        name = os.path.basename(path)
+        path = move(path, self.folder("working"))
+        with open(path, encoding="utf-8") as f:
+            owner_text, _ = split_note(f.read())
+        header = parse_header(owner_text)
+        kind = header["round"]
+        state = self.load_state(name)
+        state["running"] = {"model": kind, "round": kind, "started": _stamp(), "log": self.live_log(name, kind)}
+        self.save_state(state)
+        self.write_status()
+        log = self.live_log(name, kind)
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        livelog.append(log, f"\n## {time.strftime('%Y-%m-%d %H:%M')} · {kind}\n\n*{time.strftime('%H:%M')} started*\n")
+        job = os.path.join(self.media.work, f"{slug(name)}-{time.strftime('%Y%m%d-%H%M%S')}")
+        os.makedirs(job)
+        started, failed = time.time(), None
+        try:
+            self._unload_models()
+            section = getattr(self, f"_media_{kind}")(name, header, owner_text, job)
+        except media.MediaError as error:
+            failed = str(error)
+            what = {"transcribe": "transcribe this", "speak": "read this aloud", "image": "draw this"}[kind]
+            section = (f"## Visor could not {what}, {_stamp()}\n\n{failed}\n\n"
+                       f"Fix the note and move it back to `inbox/`. The job's files are kept in `{job}`.\n")
+        minutes = round((time.time() - started) / 60)
+        state["running"] = None
+        state["runs"].append({"run": os.path.basename(job), "model": kind, "round": kind,
+                              "exit": 1 if failed else 0, "finished": _stamp(), "pull_request": "none"})
+        self.save_state(state)
+        if not failed:
+            shutil.rmtree(job, ignore_errors=True)
+        livelog.append(log, f"\n*{time.strftime('%H:%M')}* " + ("**Failed**: " + failed[:500] if failed else "**Finished**")
+                       + f" · {minutes} minutes\n")
+        append_to_note(path, section.rstrip() + f"\n\n{REPLY_HEADING}\n")
+        move(path, self.folder("your-turn"))
+        return f"{name}: {kind} job {'FAILED' if failed else 'done'} after {minutes} minutes"
+
+    def _media_transcribe(self, name, header, owner_text, job):
+        audio = [p for p in self._attachments(owner_text) if p.lower().endswith(media.AUDIO)]
+        if not audio:
+            raise media.MediaError("there is no audio to transcribe: attach the recording to the note "
+                                   "(`![[recording.m4a]]`), with the file somewhere in `tasks/`.")
+        parts = [f"## Transcript, {_stamp()}", ""]
+        for i, source in enumerate(audio):
+            step = os.path.join(job, str(i))
+            os.makedirs(step)
+            took = time.time()
+            result = media.transcribe(self.media, source, step, (header["language"] or "auto").lower())
+            parts += [f"`{os.path.basename(source)}` · {result['seconds'] / 60:.1f} minutes of audio · "
+                      f"took {round((time.time() - took) / 60)} minutes", "", result["text"] or "(no speech heard)", ""]
+        return "\n".join(parts)
+
+    def _media_speak(self, name, header, owner_text, job):
+        notes = [p for p in self._attachments(owner_text) if p.lower().endswith(".md")]
+        if notes:
+            texts = []
+            for note in notes:
+                with open(note, encoding="utf-8", errors="replace") as f:
+                    texts.append(f.read())
+            source = ", ".join(f"`{os.path.basename(n)}`" for n in notes)
+        else:
+            texts, source = [header["round text"] or "", note_body(owner_text)], "the note"
+        text = media.speech_text("\n\n".join(t for t in texts if t.strip()))
+        voice, speed = (header["voice"] or "af_heart").strip(), (header["speed"] or "1.0").strip()
+        language = (header["language"] or ("en-gb" if voice[:1] == "b" else "en-us")).strip().lower()
+        took = time.time()
+        result = media.speak(self.media, text, job, voice, speed, language)
+        (saved,) = self._keep(name, "audio", result["files"])
+        return (f"## Audio, {_stamp()}\n\n{source} read by `{voice}` at speed {speed} · "
+                f"{result['seconds'] / 60:.1f} minutes · took {round((time.time() - took) / 60)} minutes\n\n"
+                f"![[{saved}]]\n")
+
+    def _media_image(self, name, header, owner_text, job):
+        prompt = " ".join(t for t in (header["round text"], note_body(owner_text)) if t)
+        options = {k: header[k] for k in ("model", "size", "count", "steps", "seed", "negative", "quality")}
+        options["prompt"] = prompt
+        took = time.time()
+        result = media.generate(self.media, options, job)
+        spec, saved = result["spec"], self._keep(name, "image", result["files"])
+        settings = (f"`{spec['name']}` · {spec['width']}×{spec['height']} · {spec['steps']} steps"
+                    + (" with DMD2" if spec["fast"] else "") + f" · seed {spec['seed']} · "
+                    f"took {round((time.time() - took) / 60)} minutes")
+        return f"## Images, {_stamp()}\n\n{settings}\n\n" + "\n".join(f"![[{s}]]" for s in saved) + "\n"
+
+    def _attachments(self, owner_text):
+        """Files the note embeds or links, found inside the tasks folder and nowhere else."""
+        names = re.findall(r"!?\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]", owner_text)
+        names += [urllib.parse.unquote(n) for n in re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", owner_text)]
+        root = os.path.realpath(self.tasks)
+        found = []
+        for wanted in names:
+            wanted = wanted.strip()
+            hit = None
+            for folder, dirs, files in os.walk(root):
+                dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+                for candidate in files:
+                    full = os.path.join(folder, candidate)
+                    if candidate == os.path.basename(wanted) and full.endswith(wanted):
+                        hit = full
+                        break
+                if hit:
+                    break
+            if hit and os.path.realpath(hit).startswith(root + os.sep) and hit not in found:
+                found.append(hit)
+        return found
+
+    def _keep(self, name, kind, files):
+        """Copy what a job made into the media folder under names the note can embed."""
+        os.makedirs(self.media_folder, exist_ok=True)
+        stem, saved, n = os.path.splitext(name)[0], [], 1
+        for source in files:
+            ext = os.path.splitext(source)[1].lower()
+            while os.path.exists(os.path.join(self.media_folder, f"{stem} {kind} {n}{ext}")):
+                n += 1
+            target = f"{stem} {kind} {n}{ext}"
+            shutil.copyfile(source, os.path.join(self.media_folder, target))
+            os.chmod(os.path.join(self.media_folder, target), 0o664)
+            saved.append(target)
+        return saved
+
+    def _unload_models(self):
+        """This machine holds one large model at a time: free the model server's first."""
+        if not shutil.which("ollama"):
+            return
+        loaded = subprocess.run(["ollama", "ps"], capture_output=True, text=True).stdout.splitlines()[1:]
+        for line in loaded:
+            if line.split():
+                subprocess.run(["ollama", "stop", line.split()[0]], capture_output=True)
+        for _ in range(60):  # stopping returns before the memory is given back
+            if subprocess.run(["pgrep", "-u", "ollama", "-x", "llama-server"], capture_output=True).returncode != 0:
+                return
+            time.sleep(2)
 
     def review_build(self, build_run, project, task_file, rest, log=None):
         """A read-only round on a build's branch, by the reviewer model, asked to check
@@ -792,7 +972,9 @@ class Dispatcher:
                     state = json.load(f)
                 if state.get("running"):
                     r = state["running"]
-                    running.append(f"- `{state['note']}`: {r['round']} round on the {r['model']} model, since {r['started']}"
+                    doing = (f"{r['round']} job" if r["round"] in MEDIA_ROUNDS
+                             else f"{r['round']} round on the {r['model']} model")
+                    running.append(f"- `{state['note']}`: {doing}, since {r['started']}"
                                    + (f" · live log: {_link(r['log'])}" if r.get("log") else ""))
                 recent += [(run["finished"], state["note"], run) for run in state.get("runs", [])]
         recent.sort(key=lambda item: (item[0], item[1]), reverse=True)

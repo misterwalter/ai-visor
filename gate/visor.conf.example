@@ -30,6 +30,20 @@ github_owner = your-github-name
 # logs = /srv/notes/tasks/logs
 live_log_every = 60
 
+# Transcription, speech and images (media.py). These are the defaults, under
+# tools; set any that differ. sandbox = no is for tests only.
+[media]
+tools = /srv/code/tools
+# whisper = /srv/code/tools/whisper.cpp/build/bin/whisper-cli
+# whisper_model = /srv/code/tools/models/ggml-large-v3-turbo.bin
+# kokoro_python = /srv/code/tools/kokoro-venv/bin/python
+# comfyui = /srv/code/tools/ComfyUI
+# comfy_python = /srv/code/tools/comfy-venv/bin/python
+# comfy_models = /srv/code/tools/models/comfy
+threads = 16
+# The longest a job may take, in minutes.
+minutes = 360
+
 # Ollama's names for the models. These are the defaults.
 [models]
 official = coder-official
