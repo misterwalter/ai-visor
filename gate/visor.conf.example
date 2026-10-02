@@ -23,10 +23,11 @@ reviewer = official
 # logs = /srv/notes/tasks/logs
 live_log_every = 60
 
-# Ollama's names for the two builds. These are the defaults.
+# Ollama's names for the models. These are the defaults.
 [models]
 official = coder-official
 abliterated = coder-abliterated
+glimmer = glimmer-abliterated
 
 # One section per project. source is a local clone of it; each run copies it
 # afresh. A Godot project (one with a project.godot) is tested with GUT and needs
@@ -44,3 +45,5 @@ tests = python3 tests.py
 # lettered drafts, never changing a file of yours. Notes ask for Write: rounds.
 [project my-story]
 folder = /srv/notes/stories/my-story
+# The model for notes that name none: here the writing model.
+model = glimmer

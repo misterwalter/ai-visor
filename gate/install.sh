@@ -11,20 +11,22 @@ HERE="$(dirname "$(realpath "$0")")"
 # Registering again makes Ollama unload a loaded copy of the model, even from
 # under a run, so it happens only when the recipe has changed since last time.
 mkdir -p "$HOME/.local/state/visor"
-for build in abliterated official; do
-  base="$(awk '/^FROM /{print $2}' "$HERE/Modelfile.$build")"
-  recipe="$(sha256sum < "$HERE/Modelfile.$build")"
-  registered="$HOME/.local/state/visor/registered-coder-$build"
-  if [ -f "$registered" ] && [ "$(cat "$registered")" = "$recipe" ] && ollama show "coder-$build" > /dev/null 2>&1; then
-    echo "model coder-$build unchanged"
+# Each recipe and the name Ollama knows it by.
+for pair in coder-abliterated:abliterated coder-official:official glimmer-abliterated:glimmer-abliterated; do
+  name="${pair%%:*}"; file="$HERE/Modelfile.${pair#*:}"
+  base="$(awk '/^FROM /{print $2}' "$file")"
+  recipe="$(sha256sum < "$file")"
+  registered="$HOME/.local/state/visor/registered-$name"
+  if [ -f "$registered" ] && [ "$(cat "$registered")" = "$recipe" ] && ollama show "$name" > /dev/null 2>&1; then
+    echo "model $name unchanged"
   elif ollama show "$base" > /dev/null 2>&1; then
     # Ollama reports progress on stderr; keep it only if the step fails.
-    log="$(ollama create "coder-$build" -f "$HERE/Modelfile.$build" 2>&1)" \
-      || { echo "$log"; echo "model coder-$build FAILED to register"; exit 1; }
+    log="$(ollama create "$name" -f "$file" 2>&1)" \
+      || { echo "$log"; echo "model $name FAILED to register"; exit 1; }
     echo "$recipe" > "$registered"
-    echo "model coder-$build registered"
+    echo "model $name registered"
   else
-    echo "model coder-$build skipped: weights for $base are not on disk"
+    echo "model $name skipped: weights for $base are not on disk"
   fi
 done
 

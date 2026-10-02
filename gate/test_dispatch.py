@@ -106,6 +106,7 @@ class DispatchTest(unittest.TestCase):
 
                 [project story]
                 folder = {root}/story
+                model = glimmer
                 """))
         os.environ.update(FAKE_RESULTS=self.results, FAKE_CALLS=self.calls)
         os.environ.pop("FAKE_EXIT", None)
@@ -264,6 +265,12 @@ class DispatchTest(unittest.TestCase):
         note = self.read("your-turn", "ch5.md")
         self.assertIn("## Drafts, ", note)
         self.assertIn("`Chapter4b.md` (draft of `Chapter4a.md`)", note)
+
+    def test_a_folder_project_s_own_model_is_used_when_the_note_names_none(self):
+        self.note("inbox", "ch5.md", "Project: story\nWrite: chapter five\n")
+        self.d.once()
+        (call,) = self.calls_made()
+        self.assertEqual(call[2], "glimmer-abliterated")
 
     def test_a_reply_on_a_folder_asks_for_more_writing_from_the_folder_as_it_is(self):
         self.note("approved", "ch5.md", "Project: story\nModel: official\nWrite: five\n\n---\n\n## Drafts, x\n\nDone.\n\n---\n\n## Your reply\n\nDarker.\n")

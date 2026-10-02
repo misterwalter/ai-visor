@@ -81,7 +81,7 @@ The first lines of a note tell visor what to do. Only `Project:` is required.
 | `Plan:` | Visor reads the project, changes nothing, and replies with a plan and questions. | This is the default. |
 | `Build:` | For a repository: visor makes the change straight away, on its own branch, and opens a pull request. | |
 | `Write:` | For a folder project: visor writes what you ask and adds it beside your files as new drafts, `Chapter4b.md` after `Chapter4a.md`. It never changes or deletes a file of yours. | |
-| `Model: official`, `abliterated` or `both` | Which model does the work. `both` runs it on each, one after the other, and gives you both answers. | `both`, for now. |
+| `Model: official`, `abliterated`, `glimmer` or `both` | Which model does the work. `official` and `abliterated` are the two coder builds; `both` runs each in turn and gives you both answers. `glimmer` is the abliterated Muse-Glimmer, for writing: slower, better prose. | The project's own `model` setting, else `both`. |
 
 The question or request can go on the same line as `Analysis:`, `Plan:` or
 `Build:`, or below the header, or both.
@@ -209,7 +209,8 @@ class Dispatcher:
         # Live logs: what each run is doing, readable in the notes while it goes.
         self.logs = visor.get("logs", os.path.join(self.tasks, "logs"))
         self.live_log_every = visor.get("live_log_every", "60")
-        self.models = {"official": "coder-official", "abliterated": "coder-abliterated"}
+        self.models = {"official": "coder-official", "abliterated": "coder-abliterated",
+                       "glimmer": "glimmer-abliterated"}
         if parser.has_section("models"):
             self.models.update(parser["models"])
         self.projects = {}
@@ -220,7 +221,7 @@ class Dispatcher:
                 if bool(source) == bool(folder):
                     _fail(f"{path}: [{section}] needs either source (a repository) or folder (a plain folder)")
                 self.projects[name] = {"source": source or folder, "tests": parser[section].get("tests", ""),
-                                       "folder": bool(folder)}
+                                       "folder": bool(folder), "model": parser[section].get("model")}
         for folder in FOLDERS:
             if not os.path.isdir(os.path.join(self.tasks, folder)):
                 raise ConfigError(f"the tasks folder has no {folder}/: {self.tasks}")
@@ -296,13 +297,14 @@ class Dispatcher:
             known = ", ".join(sorted(self.projects)) or "none yet"
             return None, [], None, f"visor does not know a project called `{header['project']}`. Known: {known}."
 
-        model = (header["model"] or self.default_model).strip().lower()
+        model = (header["model"] or self.projects[header["project"]]["model"] or self.default_model).strip().lower()
         if model == "both":
             models = ["official", "abliterated"]
         elif model in self.models:
             models = [model]
         else:
-            return None, [], None, f"`Model: {header['model']}` is not one visor knows: use official, abliterated or both."
+            known = ", ".join(sorted(self.models))
+            return None, [], None, f"`Model: {header['model'] or model}` is not one visor knows: use {known}, or both."
 
         settings = self.projects[header["project"]]
         if came_from == "approved":

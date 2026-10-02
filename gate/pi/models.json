@@ -9,7 +9,10 @@
           "id": "coder-abliterated",
           "contextWindow": 65536,
           "maxTokens": 8192,
-          "samplingParams": { "temperature": 1.0, "top_p": 0.95 },
+          "samplingParams": {
+            "temperature": 1.0,
+            "top_p": 0.95
+          },
           "compat": {
             "supportsStore": false,
             "supportsDeveloperRole": false,
@@ -21,7 +24,25 @@
           "id": "coder-official",
           "contextWindow": 65536,
           "maxTokens": 8192,
-          "samplingParams": { "temperature": 1.0, "top_p": 0.95 },
+          "samplingParams": {
+            "temperature": 1.0,
+            "top_p": 0.95
+          },
+          "compat": {
+            "supportsStore": false,
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": false,
+            "maxTokensField": "max_tokens"
+          }
+        },
+        {
+          "id": "glimmer-abliterated",
+          "contextWindow": 65536,
+          "maxTokens": 16384,
+          "samplingParams": {
+            "temperature": 1.0,
+            "top_p": 0.95
+          },
           "compat": {
             "supportsStore": false,
             "supportsDeveloperRole": false,
