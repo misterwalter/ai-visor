@@ -1082,9 +1082,20 @@ def _is_godot(source):
     return os.path.exists(os.path.join(source, "project.godot"))
 
 
+# A process running the runner: bash with run_gate.sh as its script. Not any process whose
+# command line merely mentions the name, such as a script that waits for runs to end:
+# matching one of those once had visor wait for it, and it for visor, for two hours.
+RUNNER_RE = re.compile(r"^(\S*/)?(ba)?sh\s+(\S*/)?run_gate\.sh(\s|$)")
+
+
+def _is_runner(command_line):
+    return bool(RUNNER_RE.match(command_line))
+
+
 def _run_gate_is_running():
-    return subprocess.run(["pgrep", "-u", str(os.getuid()), "-f", "run_gate.sh"],
-                          stdout=subprocess.DEVNULL).returncode == 0
+    listed = subprocess.run(["pgrep", "-u", str(os.getuid()), "-a", "-f", "run_gate.sh"],
+                            capture_output=True, text=True).stdout
+    return any(_is_runner(line.split(" ", 1)[1]) for line in listed.splitlines() if " " in line)
 
 
 def main(argv):

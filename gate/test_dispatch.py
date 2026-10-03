@@ -586,6 +586,14 @@ class DispatchTest(unittest.TestCase):
         models = [c[2] for c in self.calls_made()]
         self.assertEqual(models, ["coder-official", "coder-official", "coder-abliterated"])
 
+    def test_only_a_process_running_the_runner_counts_as_a_run(self):
+        self.assertTrue(dispatch._is_runner("bash /home/x/ai-visor/gate/run_gate.sh /srv/code/p task.md m pi"))
+        self.assertTrue(dispatch._is_runner("/usr/bin/bash ./gate/run_gate.sh a b c d"))
+        self.assertFalse(dispatch._is_runner("sh -c until grep -q ok log; do sleep 60; done; "
+                                             "while pgrep -f run_gate.sh; do sleep 60; done"))
+        self.assertFalse(dispatch._is_runner("grep run_gate.sh notes.md"))
+        self.assertFalse(dispatch._is_runner("bash /x/install.sh run_gate.sh"))
+
     def test_no_self_update_happens_under_a_run(self):
         self.other_run = True
         self.d.maybe_update()  # would need git and the network if it did not return at once
