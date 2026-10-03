@@ -179,7 +179,8 @@ class MediaTest(unittest.TestCase):
     # Images
 
     def test_an_image_is_drawn_with_the_fast_add_on_and_built_in_nodes_only(self):
-        result = media.generate(self.settings, {"prompt": "a lighthouse at dusk", "count": "2"}, self.job)
+        result = media.generate(self.settings, {"prompt": "a lighthouse at dusk", "count": "2", "model": "lustify"},
+                                self.job)
         self.assertEqual(len(result["files"]), 2)
         for path in result["files"]:
             with open(path, "rb") as f:
@@ -199,9 +200,14 @@ class MediaTest(unittest.TestCase):
         self.assertEqual(media.comfy_graph(noob)["vpred"]["inputs"]["sampling"], "v_prediction")
 
     def test_full_quality_drops_the_add_on(self):
-        spec = media.image_spec({"prompt": "a fox", "quality": "full", "size": "832x1216"})
+        spec = media.image_spec({"prompt": "a fox", "quality": "full", "size": "832x1216", "model": "lustify"})
         self.assertIsNone(spec["lora"])
         self.assertEqual((spec["steps"], spec["width"], spec["height"]), (30, 832, 1216))
+
+    def test_the_default_is_realistic_vision_at_its_own_size(self):
+        spec = media.image_spec({"prompt": "a fox"})
+        self.assertEqual((spec["name"], spec["width"], spec["height"], spec["steps"]), ("realistic-vision", 512, 768, 6))
+        self.assertIsNone(spec["lora"], "an SD 1.5 model takes no SDXL add-on")
 
     def test_bad_image_lines_are_explained(self):
         for options, said in (({"prompt": ""}, "no prompt"), ({"prompt": "x", "model": "dalle"}, "not an image model"),

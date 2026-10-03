@@ -191,7 +191,7 @@ IMAGE_MODELS = {
                          "sampler": "dpmpp_sde", "scheduler": "karras",
                          "about": "Realistic Vision V6 (SD 1.5), photographic; the fastest"},
 }
-DEFAULT_IMAGE_MODEL = "lustify"
+DEFAULT_IMAGE_MODEL = "realistic-vision"
 NEGATIVE = "lowres, blurry, deformed, bad anatomy, extra limbs, watermark, text, signature"
 
 
