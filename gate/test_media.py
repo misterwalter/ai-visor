@@ -56,7 +56,8 @@ FAKE_COMFY = textwrap.dedent('''\
                 "CLIPTextEncode", "EmptyLatentImage", "KSampler", "VAEDecode", "SaveImage",
                 "UNETLoader", "ModelSamplingAuraFlow", "CLIPLoader", "T5TokenizerOptions", "VAELoader",
                 "CFGGuider", "KSamplerSelect", "BetaSamplingScheduler", "RandomNoise",
-                "EmptySD3LatentImage", "SamplerCustomAdvanced"}
+                "EmptySD3LatentImage", "SamplerCustomAdvanced",
+                "LoadImage", "ImageScale", "ControlNetLoader", "ControlNetApplyAdvanced"}
     def png():
         raw = b"\\x00\\xff\\x00\\x00"
         chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
@@ -229,6 +230,32 @@ class MediaTest(unittest.TestCase):
         base = media.image_spec({"prompt": "a fox", "model": "sdxl-base"})
         self.assertEqual((base["lora"], base["steps"]), (media.DMD2, 8))
         self.assertEqual(media.image_spec({"prompt": "a fox", "model": "sdxl-base", "quality": "full"})["cfg"], 7.0)
+
+    def test_a_pose_image_steers_the_figures_through_the_pose_control(self):
+        self.write(os.path.join(self.settings.comfy_models, "controlnet", media.POSE_CONTROL["sdxl"]), "weights")
+        skeleton = os.path.join(self.tmp.name, "skeleton.png")
+        self.write(skeleton, "png")
+        result = media.generate(self.settings, {"prompt": "a fox", "model": "lustify", "pose": skeleton,
+                                                "pose strength": "0.6"}, self.job)
+        self.assertEqual(len(result["files"]), 1)
+        graph = json.load(open(os.path.join(self.job, "graph.json")))
+        self.assertEqual(graph["pose_image"]["inputs"]["image"], "pose.png")
+        self.assertEqual(graph["pose_control"]["inputs"]["control_net_name"], media.POSE_CONTROL["sdxl"])
+        self.assertEqual(graph["posed"]["inputs"]["strength"], 0.6)
+        self.assertEqual(graph["sampler"]["inputs"]["positive"], ["posed", 0])
+        self.assertTrue(os.path.exists(os.path.join(self.job, "input", "pose.png")), "copied in for ComfyUI")
+
+    def test_a_pose_needs_its_control_and_a_model_that_takes_one(self):
+        skeleton = os.path.join(self.tmp.name, "skeleton.png")
+        self.write(skeleton, "png")
+        with self.assertRaises(media.MediaError) as caught:
+            media.generate(self.settings, {"prompt": "x", "model": "lustify", "pose": skeleton}, self.job)
+        self.assertIn(media.POSE_CONTROL["sdxl"], str(caught.exception))
+        with self.assertRaises(media.MediaError) as caught:
+            media.generate(self.settings, {"prompt": "x", "model": "lustify", "pose": "/nowhere/pose.png"}, self.job)
+        self.assertIn("was not found", str(caught.exception))
+        with self.assertRaises(media.MediaError):
+            media.pose_strength("strong")
 
     def test_full_quality_drops_the_add_on(self):
         spec = media.image_spec({"prompt": "a fox", "quality": "full", "size": "832x1216", "model": "lustify"})

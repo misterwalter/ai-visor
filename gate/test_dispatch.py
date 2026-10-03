@@ -397,6 +397,28 @@ class DispatchTest(unittest.TestCase):
         self.assertIn("![[pic image 1.png]]", note)
         self.assertIn("![[pic image 2.png]]", note)
 
+    def test_a_pose_image_named_in_the_note_is_found_and_passed_on(self):
+        with open(os.path.join(self.tasks, "inbox", "arms-up.png"), "wb") as f:
+            f.write(b"png")
+        self.note("inbox", "posed.md", "Image: a fox\nModel: pony\nPose: ![[arms-up.png]]\nPose strength: 0.5\n")
+        seen = {}
+        def fake(settings, options, job):
+            seen.update(options)
+            spec = {"name": "pony", "width": 1024, "height": 1024, "steps": 8, "fast": True, "seed": 7,
+                    "pose": "pose.png", "pose_strength": 0.5}
+            return {"files": [self.made(job, "a.png")], "spec": spec}
+        with mock.patch.object(dispatch.media, "generate", fake):
+            self.d.once()
+        self.assertTrue(seen["pose"].endswith(os.path.join("inbox", "arms-up.png")))
+        self.assertEqual(seen["pose strength"], "0.5")
+        self.assertIn("pose from `arms-up.png` at 0.5", self.read("your-turn", "posed.md"))
+
+    def test_a_pose_image_that_is_not_in_the_tasks_folder_is_refused(self):
+        self.note("inbox", "posed.md", "Image: a fox\nPose: ![[elsewhere.png]]\n")
+        with mock.patch.object(dispatch.media, "generate", side_effect=AssertionError("must not run")):
+            self.d.once()
+        self.assertIn("the pose image `elsewhere.png` was not found", self.read("your-turn", "posed.md"))
+
     def test_a_media_job_that_fails_says_why_and_keeps_its_files(self):
         self.note("inbox", "pic.md", "Image: a fox\n")
         with mock.patch.object(dispatch.media, "generate", side_effect=dispatch.media.MediaError("ComfyUI stopped")):

@@ -60,7 +60,8 @@ VOICE_LANGUAGES = {"a": "American English", "b": "British English", "e": "Spanis
 MEDIA_ROUNDS = ("transcribe", "speak", "image")
 # The header lines a note may have, other than the rounds.
 HEADER_KEYS = ("project", "model", "thinking", "web", "new project", "github", "tests",
-               "voice", "speed", "language", "size", "count", "steps", "seed", "negative", "quality")
+               "voice", "speed", "language", "size", "count", "steps", "seed", "negative", "quality",
+               "pose", "pose strength")
 HEADER_RE = re.compile(r"^\s*(" + "|".join(k.replace(" ", r"\s+") for k in HEADER_KEYS + ROUNDS + MEDIA_ROUNDS)
                        + r")\s*:\s*(.*)$", re.IGNORECASE)
 FOLDERS = ("inbox", "approved", "working", "your-turn", "done")
@@ -160,6 +161,7 @@ folder as current file".
 | `Transcribe:` with a recording attached (`![[memo.m4a]]`) | Adds the transcript to the note. `Language: en` if the language is known. |
 | `Speak:` with text below, or a note embedded (`![[Chapter2a]]`) | Reads it aloud into an MP3. `Voice:` from the list at the end (default `af_heart`), `Speed:` (1.0). |
 | `Image: <prompt>`, more prompt below if wanted | Draws it. `Model:` is the image model, from the list at the end (default `realistic-vision`). `Size: 832x1216`, `Count: 2`, `Seed:`, `Negative:`, `Quality: full` for more steps, slower. |
+| `Pose: ![[skeleton.png]]` on an Image note | Draws the figures in that pose. The image must be an OpenPose skeleton (coloured stick figures on black), not a photograph: visor has no add-on to trace a photo into one. `Pose strength: 0.8` (default) follows it, `0.5` loosely, `1.0` exactly. Works with every image model except `chroma`. |
 
 Each runs walled in with no network, and all of them take time on this
 machine: minutes for an image, about real time for a recording.
@@ -786,13 +788,23 @@ class Dispatcher:
 
     def _media_image(self, name, header, owner_text, job):
         prompt = " ".join(t for t in (header["round text"], note_body(owner_text)) if t)
-        options = {k: header[k] for k in ("model", "size", "count", "steps", "seed", "negative", "quality")}
+        options = {k: header[k] for k in ("model", "size", "count", "steps", "seed", "negative", "quality", "pose strength")}
         options["prompt"] = prompt
+        if header["pose"]:
+            # The pose skeleton: a file named on the Pose: line, embedded or plain, inside tasks/.
+            named = re.sub(r"^!?\[\[|\]\]$", "", header["pose"].strip()).split("|")[0].strip()
+            found = self._attachments(f"[[{named}]]")
+            if not found:
+                raise media.MediaError(f"the pose image `{named}` was not found inside the tasks folder. "
+                                       "Attach it to the note, or put it in `tasks/media/` and name it on the `Pose:` line.")
+            options["pose"] = found[0]
         took = time.time()
         result = media.generate(self.media, options, job)
         spec, saved = result["spec"], self._keep(name, "image", result["files"])
         settings = (f"`{spec['name']}` · {spec['width']}×{spec['height']} · {spec['steps']} steps"
-                    + (" with DMD2" if spec["fast"] else "") + f" · seed {spec['seed']} · "
+                    + (" with DMD2" if spec["fast"] else "")
+                    + (f" · pose from `{os.path.basename(options['pose'])}` at {spec['pose_strength']}" if spec.get("pose") else "")
+                    + f" · seed {spec['seed']} · "
                     f"took {round((time.time() - took) / 60)} minutes")
         return f"## Images, {_stamp()}\n\n{settings}\n\n" + "\n".join(f"![[{s}]]" for s in saved) + "\n"
 

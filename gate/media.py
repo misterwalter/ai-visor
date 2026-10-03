@@ -175,6 +175,10 @@ def speak(settings, text, job, voice="af_heart", speed="1.0", language="en-us"):
 # that can take the DMD2 add-on, which cuts 30 steps to 8: on a CPU, the difference
 # between a quarter of an hour and a few minutes per image.
 DMD2 = "dmd2_sdxl_4step_lora_fp16.safetensors"
+# A pose control per model family: the note gives a skeleton image, and the model draws its
+# figures in that pose. Checked against the authors' published files when downloaded.
+POSE_CONTROL = {"sdxl": "controlnet-openpose-sdxl-xinsir.safetensors",
+                "sd15": "control_v11p_sd15_openpose_fp16.safetensors"}
 IMAGE_MODELS = {
     "lustify": {"file": "lustifyNSFWCheckpoint_zenithV9.safetensors", "kind": "sdxl", "fast": True,
                 "about": "SDXL, photographic, made for adult content"},
@@ -260,7 +264,21 @@ def image_spec(options):
         "clip_skip": model.get("clip_skip"),
         "vpred": bool(model.get("vpred")),
         "fast": bool(fast),
+        "pose": options.get("pose"),
+        "pose_strength": pose_strength(options.get("pose strength")),
     }
+
+
+def pose_strength(value):
+    if value is None or str(value).strip() == "":
+        return 0.8
+    try:
+        strength = float(str(value).strip())
+    except ValueError:
+        raise MediaError(f"`Pose strength: {value}` is not a number: use 0.8 to follow the pose, 0.5 loosely, 1.0 exactly.")
+    if not 0.0 < strength <= 2.0:
+        raise MediaError("`Pose strength:` must be above 0 and at most 2.")
+    return strength
 
 
 def comfy_graph(spec):
@@ -283,10 +301,22 @@ def comfy_graph(spec):
         model = ["vpred", 0]
     graph["positive"] = {"class_type": "CLIPTextEncode", "inputs": {"text": spec["prompt"], "clip": clip}}
     graph["negative"] = {"class_type": "CLIPTextEncode", "inputs": {"text": spec["negative"], "clip": clip}}
+    positive, negative = ["positive", 0], ["negative", 0]
+    if spec["pose"]:
+        # The skeleton image, scaled to the canvas, steers both prompts through the pose control.
+        graph["pose_image"] = {"class_type": "LoadImage", "inputs": {"image": spec["pose"]}}
+        graph["pose_scaled"] = {"class_type": "ImageScale", "inputs": {
+            "image": ["pose_image", 0], "upscale_method": "lanczos", "width": spec["width"], "height": spec["height"],
+            "crop": "center"}}
+        graph["pose_control"] = {"class_type": "ControlNetLoader", "inputs": {"control_net_name": POSE_CONTROL[spec["kind"]]}}
+        graph["posed"] = {"class_type": "ControlNetApplyAdvanced", "inputs": {
+            "positive": positive, "negative": negative, "control_net": ["pose_control", 0], "image": ["pose_scaled", 0],
+            "strength": spec["pose_strength"], "start_percent": 0.0, "end_percent": 0.8, "vae": vae}}
+        positive, negative = ["posed", 0], ["posed", 1]
     graph["latent"] = {"class_type": "EmptyLatentImage",
                        "inputs": {"width": spec["width"], "height": spec["height"], "batch_size": spec["count"]}}
     graph["sampler"] = {"class_type": "KSampler", "inputs": {
-        "model": model, "positive": ["positive", 0], "negative": ["negative", 0], "latent_image": ["latent", 0],
+        "model": model, "positive": positive, "negative": negative, "latent_image": ["latent", 0],
         "seed": spec["seed"], "steps": spec["steps"], "cfg": spec["cfg"], "sampler_name": spec["sampler"],
         "scheduler": spec["scheduler"], "denoise": 1.0}}
     graph["decode"] = {"class_type": "VAEDecode", "inputs": {"samples": ["sampler", 0], "vae": vae}}
@@ -361,8 +391,18 @@ def _free_port():
 
 
 def generate(settings, options, job, on_progress=None):
-    """Draw images. Returns {"files": [png...], "spec"}."""
+    """Draw images. Returns {"files": [png...], "spec"}. options["pose"], if given, is the path
+    of a pose skeleton image; it is copied into the job for ComfyUI to load."""
+    pose = options.get("pose")
+    if pose:
+        if not os.path.isfile(pose):
+            raise MediaError(f"the pose image `{os.path.basename(pose)}` was not found.")
+        os.makedirs(os.path.join(job, "input"), exist_ok=True)
+        shutil.copyfile(pose, os.path.join(job, "input", "pose" + os.path.splitext(pose)[1].lower()))
+        options = dict(options, pose="pose" + os.path.splitext(pose)[1].lower())
     spec = image_spec(options)
+    if spec["pose"] and spec["kind"] not in POSE_CONTROL:
+        raise MediaError(f"`{spec['name']}` cannot take a pose: the pose controls are for the SDXL and SD 1.5 models.")
     main = os.path.join(settings.comfyui, "main.py")
     if spec["kind"] == "chroma":
         weights = [os.path.join(settings.comfy_models, "diffusion_models", spec["file"]),
@@ -372,6 +412,8 @@ def generate(settings, options, job, on_progress=None):
         weights = [os.path.join(settings.comfy_models, "checkpoints", spec["file"])]
     if spec["lora"]:
         weights.append(os.path.join(settings.comfy_models, "loras", spec["lora"]))
+    if spec["pose"]:
+        weights.append(os.path.join(settings.comfy_models, "controlnet", POSE_CONTROL[spec["kind"]]))
     _require(main, settings.comfy_python, *weights, what=f"Image generation ({spec['name']})")
     for folder in ("out", "temp", "user", "input"):
         os.makedirs(os.path.join(job, folder), exist_ok=True)

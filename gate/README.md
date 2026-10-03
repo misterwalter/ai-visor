@@ -279,6 +279,11 @@ models, and the job's scratch folder (`~/.local/state/visor/media/<job>/`).
   the DMD2 add-on (8 steps rather than 30) unless the note asks for `Quality: full`.
   Chroma (`Model: chroma`) uses its author's own ComfyUI workflow: the model, the
   T5 text encoder and the Flux decoder as three files, 26 beta-scheduled steps.
+  A `Pose:` line names an OpenPose skeleton image inside `tasks/`; the workflow
+  adds the built-in ControlNet nodes with the family's pose control
+  (`POSE_CONTROL`), at `Pose strength:` (default 0.8) for the first 80% of the
+  steps. Tracing a photograph into a skeleton needs a preprocessor add-on, which
+  is not installed: the note supplies the skeleton.
 
 The dispatcher frees the model server's memory first, reads attachments only from
 inside `tasks/`, copies results into `tasks/media/`, and keeps a failed job's
