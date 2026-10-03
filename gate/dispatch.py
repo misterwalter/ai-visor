@@ -46,6 +46,15 @@ import livelog  # noqa: E402
 import media  # noqa: E402
 
 ROUNDS = ("analysis", "plan", "build", "write")
+# What the language models are, for the sample job's list.
+LANGUAGE_MODELS = {
+    "official": "Qwen3-Coder-Next, the official build: code, questions and plans.",
+    "abliterated": "The same coder, abliterated: it refuses nothing.",
+    "glimmer": "Muse-Glimmer 30B, abliterated: prose and fiction. Slower; better writing.",
+}
+# Kokoro's voices begin with a letter for their language.
+VOICE_LANGUAGES = {"a": "American English", "b": "British English", "e": "Spanish", "f": "French",
+                   "h": "Hindi", "i": "Italian", "j": "Japanese", "p": "Brazilian Portuguese", "z": "Mandarin"}
 # Jobs for a fixed program rather than an agent (media.py). They need no project.
 MEDIA_ROUNDS = ("transcribe", "speak", "image")
 # The header lines a note may have, other than the rounds.
@@ -93,7 +102,7 @@ The first lines of a note tell visor what to do. Only `Project:` is required.
 | `Plan:` | Visor reads the project, changes nothing, and replies with a plan and questions. | This is the default. |
 | `Build:` | For a repository: visor makes the change straight away, on its own branch, and opens a pull request. | |
 | `Write:` | For a folder project: visor writes what you ask and adds it beside your files as new drafts, `Chapter4b.md` after `Chapter4a.md`. It never changes or deletes a file of yours. | |
-| `Model: official`, `abliterated`, `glimmer` or `both` | Which model does the work. `official` and `abliterated` are the two coder builds; `both` runs each in turn and gives you both answers. `glimmer` is the abliterated Muse-Glimmer, for writing: slower, better prose. | The project's own `model` setting, else `both`. |
+| `Model: <model>` | Which model does the work: one from "What this server has" at the end, or `both` for the two coder builds in turn. | The project's own `model` setting, else `both`. |
 | `Thinking: yes` or `no`, or `low`, `medium`, `high` | Whether the model thinks before it answers, and how hard. Its thinking appears in the live log. Slower. Only for models that can think, such as `glimmer`. | No thinking. |
 
 The question or request can go on the same line as `Analysis:`, `Plan:` or
@@ -142,11 +151,18 @@ folder as current file".
 | Note says | What visor does |
 |---|---|
 | `Transcribe:` with a recording attached (`![[memo.m4a]]`) | Adds the transcript to the note. `Language: en` if the language is known. |
-| `Speak:` with text below, or a note embedded (`![[Chapter2a.md]]`) | Reads it aloud into an MP3. `Voice:` (default `af_heart`; `bf_emma`, `am_michael`, `bm_george` and others), `Speed:` (1.0). |
-| `Image: <prompt>`, more prompt below if wanted | Draws it. `Model:` is the image model: `realistic-vision` (default, fastest), `big-lust`, `pony`, `aom3` (anime), `dreamshaper`, `sdxl-base`, or `chroma` (the best, and about an hour an image). `lustify` and `noobai` are known but not downloaded: Civitai gives them only to a logged-in account. `Size: 832x1216`, `Count: 2`, `Seed:`, `Negative:`, `Quality: full` for more steps, slower. |
+| `Speak:` with text below, or a note embedded (`![[Chapter2a.md]]`) | Reads it aloud into an MP3. `Voice:` from the list at the end (default `af_heart`), `Speed:` (1.0). |
+| `Image: <prompt>`, more prompt below if wanted | Draws it. `Model:` is the image model, from the list at the end (default `realistic-vision`). `Size: 832x1216`, `Count: 2`, `Seed:`, `Negative:`, `Quality: full` for more steps, slower. |
 
 Each runs walled in with no network, and all of them take time on this
 machine: minutes for an image, about real time for a recording.
+
+## What this server has
+
+Visor writes this part from what is installed, and rewrites the file when that
+changes: copy anything you want to keep before editing it here.
+
+{inventory}
 """
 
 
@@ -950,17 +966,71 @@ class Dispatcher:
             self.log(f"recovered {state['note']} after an interrupted {running['round']} round")
 
     def sample_job(self):
-        """The template, naming the projects in this server's settings. Project
-        names live only there: this repository is public."""
+        """The template, naming the projects in this server's settings and the models on
+        this machine. Project names live only there: this repository is public."""
         names = sorted(self.projects)
         return SAMPLE_JOB.format(project=names[0] if names else "my-project",
-                                 projects=", ".join(f"`{n}`" for n in names) or "none yet")
+                                 projects=", ".join(f"`{n}`" for n in names) or "none yet",
+                                 inventory=self.inventory())
+
+    def inventory(self):
+        """The models a note can name, as tables, from what is on disk."""
+        lines = ["### Language models (`Model:` on Analysis, Plan, Build and Write notes)", "",
+                 "| Model | What it is |", "|---|---|"]
+        for name, ollama in sorted(self.models.items()):
+            lines.append(f"| `{name}` | {LANGUAGE_MODELS.get(name, f'`{ollama}`')}"
+                         + (" Can think: `Thinking: yes`." if self.can_think(name) else "") + " |")
+        lines += ["| `both` | `official` then `abliterated`, each answering in turn. |", "",
+                  "### Image models (`Model:` on Image notes)", "",
+                  "| Model | What it is | On this server |", "|---|---|---|"]
+        comfy = self.media.comfy_models
+        for name, model in sorted(media.IMAGE_MODELS.items()):
+            folder = "diffusion_models" if model["kind"] == "chroma" else "checkpoints"
+            have = os.path.exists(os.path.join(comfy, folder, model["file"]))
+            default = " (default)" if name == media.DEFAULT_IMAGE_MODEL else ""
+            lines.append(f"| `{name}`{default} | {model['about']} | {'yes' if have else 'not downloaded'} |")
+        voices = self._voices()
+        lines += ["", "### Voices (`Voice:` on Speak notes)", ""]
+        if voices:
+            for prefix, language in VOICE_LANGUAGES.items():
+                these = [v for v in voices if v.startswith(prefix)]
+                if these:
+                    lines.append(f"- {language}: " + ", ".join(f"`{v}`" for v in these))
+            lines.append("")
+            lines.append("The second letter is the voice: `f` female, `m` male.")
+        else:
+            lines.append("Speech is not installed on this server yet.")
+        lines += ["", "### Transcription", "",
+                  ("Whisper large-v3-turbo, any language (`Language:` to name one)."
+                   if os.path.exists(self.media.whisper_model) else "Transcription is not installed on this server yet.")]
+        return "\n".join(lines)
+
+    def _voices(self):
+        """Kokoro's voice names, from its voices file (a zip of arrays, one per voice)."""
+        path = self.media.kokoro_voices
+        try:
+            stamp = os.path.getmtime(path)
+        except OSError:
+            return []
+        if getattr(self, "_voice_cache", (None,))[0] != stamp:
+            import zipfile
+            with zipfile.ZipFile(path) as z:
+                self._voice_cache = (stamp, sorted(n[:-4] for n in z.namelist() if n.endswith(".npy")))
+        return self._voice_cache[1]
 
     def ensure_sample(self):
+        """Keep sample-job.md in the notes: put it back if it is gone, and bring it up to date
+        when what it describes has changed, such as a model downloaded."""
         path = os.path.join(self.tasks, "sample-job.md")
-        if not os.path.exists(path):
-            write_file(path, self.sample_job())
-            self.log("wrote sample-job.md")
+        text = self.sample_job()
+        try:
+            with open(path, encoding="utf-8") as f:
+                current = f.read()
+        except FileNotFoundError:
+            current = None
+        if current != text:
+            write_file(path, text)
+            self.log("wrote sample-job.md" if current is None else "updated sample-job.md")
 
     def write_status(self):
         path = os.path.join(self.tasks, "STATUS.md")

@@ -732,6 +732,33 @@ class DispatchTest(unittest.TestCase):
         with open(path) as f:
             self.assertEqual(f.read(), self.d.sample_job())
 
+    def test_the_sample_job_lists_what_this_server_has_and_follows_a_download(self):
+        import zipfile
+        tools = os.path.join(self.tmp.name, "tools")
+        os.makedirs(os.path.join(tools, "models", "comfy", "checkpoints"))
+        open(os.path.join(tools, "models", "comfy", "checkpoints", dispatch.media.IMAGE_MODELS["pony"]["file"]), "w").close()
+        with zipfile.ZipFile(os.path.join(tools, "models", "voices-v1.0.bin"), "w") as z:
+            for voice in ("af_heart", "bm_george", "jf_alpha"):
+                z.writestr(voice + ".npy", b"")
+        with open(self.config, "a") as f:
+            f.write(f"\n[media]\ntools = {tools}\n")
+        d = dispatch.Dispatcher(self.config, self.state, now=lambda: self.clock,
+                                other_run_active=lambda: self.other_run, log=self.logged.append)
+        d.ensure_sample()
+        sample = self.read("", "sample-job.md")
+        self.assertIn("| `glimmer` | Muse-Glimmer 30B", sample)
+        self.assertIn("Can think: `Thinking: yes`.", sample)
+        self.assertRegex(sample, r"\| `pony` \|[^\n]*\| yes \|")
+        self.assertRegex(sample, r"\| `chroma` \|[^\n]*\| not downloaded \|")
+        self.assertIn("- American English: `af_heart`", sample)
+        self.assertIn("- Japanese: `jf_alpha`", sample)
+        self.assertIn("Transcription is not installed on this server yet.", sample)
+        # A model downloaded later shows up without anyone deleting the file.
+        open(os.path.join(tools, "models", "comfy", "checkpoints", dispatch.media.IMAGE_MODELS["aom3"]["file"]), "w").close()
+        d.ensure_sample()
+        self.assertRegex(self.read("", "sample-job.md"), r"\| `aom3` \|[^\n]*\| yes \|")
+        self.assertIn("updated sample-job.md", self.logged)
+
     def test_the_sample_job_is_itself_a_valid_note_for_a_known_project(self):
         header = dispatch.parse_header(self.d.sample_job())
         self.assertEqual(header["model"], "both")
