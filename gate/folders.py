@@ -56,8 +56,12 @@ def snapshot(folder):
         with open(os.path.join(repo, "info", "exclude"), "w") as f:
             f.write(EXCLUDE)
     git(*at, "add", "--all")
-    if git(*at, "status", "--porcelain"):
-        git(*at, "commit", "--quiet", "-m", f"The folder as it was at {time.strftime('%Y-%m-%d %H:%M')}")
+    # An empty folder is still a starting point: without a first commit there is no
+    # branch for a run to begin from, and the run stops before the agent starts.
+    no_commits = git(*at, "rev-parse", "--verify", "--quiet", "HEAD", check=False) == ""
+    if no_commits or git(*at, "status", "--porcelain"):
+        git(*at, "commit", "--quiet", "--allow-empty", "-m",
+            f"The folder as it was at {time.strftime('%Y-%m-%d %H:%M')}")
     return repo
 
 

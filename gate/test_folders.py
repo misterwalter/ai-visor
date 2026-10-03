@@ -67,6 +67,27 @@ class FoldersTest(unittest.TestCase):
         tracked = self.git("--git-dir", repo, "ls-tree", "-r", "--name-only", "main", cwd=self.root).splitlines()
         self.assertEqual(sorted(tracked), ["Chapter4a.md", "Story Bible.md"])
 
+    def test_an_empty_folder_still_gets_a_starting_point(self):
+        # A project made from a note starts as an empty folder; a run must still start.
+        empty = os.path.join(self.tmp.name, "vault", "New Story")
+        os.makedirs(empty)
+        repo = folders.snapshot(empty)
+        self.assertEqual(self.git("--git-dir", repo, "rev-list", "--count", "main", cwd=self.root).strip(), "1")
+        work = os.path.join(self.root, "work", "empty-run")
+        subprocess.run(["git", "clone", "--quiet", repo, work], check=True)
+        self.git("checkout", "--quiet", "-b", "visor/empty-run", "origin/main", cwd=work)
+
+    def test_a_history_left_without_a_first_commit_is_repaired(self):
+        # Histories made before this fix exist with no commit at all; the next snapshot mends them.
+        empty = os.path.join(self.tmp.name, "vault", "Old Empty")
+        os.makedirs(empty)
+        repo = folders.history(empty)
+        os.makedirs(folders.HISTORIES, exist_ok=True)
+        folders.git("init", "--quiet", "--bare", "--initial-branch", "main", repo)
+        folders.git("--git-dir", repo, "config", "core.bare", "false")
+        folders.snapshot(empty)
+        self.assertEqual(self.git("--git-dir", repo, "rev-list", "--count", "main", cwd=self.root).strip(), "1")
+
     def test_the_owner_s_edits_are_recorded_and_an_unchanged_folder_adds_nothing(self):
         repo = folders.snapshot(self.folder)
         count = lambda: int(self.git("--git-dir", repo, "rev-list", "--count", "main", cwd=self.root))
