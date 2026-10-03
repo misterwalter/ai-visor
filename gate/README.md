@@ -188,7 +188,10 @@ python3 gate/dispatch.py review <build run> <project> [official|abliterated]
 - Runs one read-only round on that build's branch and prints where the answer is.
 
 Only one run happens at a time. The dispatcher waits while any other run is in
-progress, including one started by hand. With `self_update = yes` it pulls this
+progress, including one started by hand. Any other job that should have the
+machine to itself takes visor's run lock, `flock ~/.local/state/visor/run.lock
+COMMAND`: visor waits for it too, and `STATUS.md` names the command it is
+waiting for. With `self_update = yes` it pulls this
 repository while idle, reinstalls, and restarts itself.
 
 ## Running one task by hand

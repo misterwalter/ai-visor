@@ -6,9 +6,11 @@ Godot, no network.
     python3 gate/test_dispatch.py
 """
 
+import fcntl
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -228,6 +230,41 @@ class DispatchTest(unittest.TestCase):
         self.other_run = True
         self.assertIn("waiting", self.d.once())
         self.assertEqual(self.calls_made(), [])
+
+    def test_a_job_started_by_hand_is_waited_for_and_named_in_status(self):
+        lock = os.path.join(self.state, "run.lock")
+        job = subprocess.Popen(["flock", lock, "sleep", "60"], start_new_session=True)
+        try:
+            for _ in range(100):
+                if self.d.lock_holder():
+                    break
+                time.sleep(0.05)
+            self.note("inbox", "task.md", "Project: game\nModel: official\n")
+            self.assertEqual(self.d.once(), "a job started by hand holds the run lock; waiting for it: sleep 60")
+            self.assertEqual(self.calls_made(), [])
+            status = self.read("", "STATUS.md")
+            self.assertIn("A job started by hand, outside visor: `sleep 60`. Visor waits for it", status)
+            self.assertIn("- task.md (inbox)", status)
+            self.assertIn("once the job holding the run lock ends: sleep 60", self.d.once(dry_run=True))
+        finally:
+            os.killpg(job.pid, signal.SIGTERM)
+            job.wait()
+        for _ in range(100):
+            if not self.d.lock_holder():
+                break
+            time.sleep(0.05)
+        # The job over, the note is taken, and status no longer speaks of the job.
+        self.d.once()
+        self.assertEqual(len(self.calls_made()), 1)
+        self.assertNotIn("started by hand", self.read("", "STATUS.md"))
+
+    def test_visor_s_own_job_is_never_taken_for_one_started_by_hand(self):
+        held = open(os.path.join(self.state, "run.lock"), "w")
+        fcntl.flock(held, fcntl.LOCK_EX)
+        self.assertIsNotNone(self.d.lock_holder())
+        self.d.holding_lock = True
+        self.assertIsNone(self.d.lock_holder())
+        held.close()
 
     # Replies
 

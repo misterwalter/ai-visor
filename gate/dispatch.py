@@ -267,6 +267,7 @@ class Dispatcher:
         self.log_path = os.path.join(state_dir, "dispatch.log")
         self.log = log or self._log_to_file
         self.other_run_active = other_run_active or _run_gate_is_running
+        self.holding_lock = False  # true while this dispatcher's own job has the run lock
         self._read_config(config_path)
 
     # Settings
@@ -352,6 +353,21 @@ class Dispatcher:
                 return True
         except (OSError, ValueError):
             return False
+
+    def lock_holder(self):
+        """The job, other than this dispatcher's own, that holds the run lock: its command,
+        for the owner to read. None when nothing does. A job started by hand takes the lock
+        (`flock run.lock COMMAND`) so that visor waits for it."""
+        if self.holding_lock:
+            return None
+        path = os.path.join(self.state_dir, "run.lock")
+        with open(path, "a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return _lock_owner(path) or "a job visor cannot name"
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        return None
 
     def live_log(self, note_name, who):
         """One log per note and model: every part and every round of it, in order."""
@@ -1103,6 +1119,9 @@ class Dispatcher:
         queued = [os.path.basename(p) + f" ({os.path.basename(os.path.dirname(p))})" for p in self.queue()]
         if not running and self.other_run_active():
             running = ["A run started outside visor, by hand. Visor waits for it to finish."]
+        elif not running and self.lock_holder():
+            running = [f"A job started by hand, outside visor: `{self.lock_holder()}`. Visor waits for it to "
+                       "finish, then takes what is waiting."]
         body = ["# Visor", "",
                 "## Running", ""] + (running or ["Nothing."]) + ["",
                 "## Waiting", ""] + ([f"- {q}" for q in queued] or ["Nothing."]) + ["",
@@ -1143,11 +1162,21 @@ class Dispatcher:
             self.write_status()
             return None
         if self.other_run_active():
+            self.write_status()
             return "another gate run is in progress; waiting"
         if dry_run:
-            return self.process(path, dry_run=True)
+            holder = self.lock_holder()
+            return self.process(path, dry_run=True) + (f", once the job holding the run lock ends: {holder}"
+                                                       if holder else "")
         lock = open(os.path.join(self.state_dir, "run.lock"), "w")
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            # Not waited for here: blocked on the lock, visor could say nothing of why it had stopped.
+            lock.close()
+            self.write_status()
+            return f"a job started by hand holds the run lock; waiting for it: {self.lock_holder() or 'just ended'}"
+        self.holding_lock = True
         try:
             try:
                 message = self.process(path)
@@ -1166,6 +1195,7 @@ class Dispatcher:
                         move(stuck, self.folder("your-turn"))
                         break
         finally:
+            self.holding_lock = False
             fcntl.flock(lock, fcntl.LOCK_UN)
             lock.close()
         self.write_status()
@@ -1175,10 +1205,13 @@ class Dispatcher:
         self.log("started")
         self.recover()
         last_update = 0.0
+        said = None
         while True:
             message = self.once()
-            if message:
+            # A wait is logged when it begins, not once a minute for as long as it lasts.
+            if message and not (message == said and "waiting" in message):
                 self.log(message)
+            said = message
             if self.self_update and not message and self.now() - last_update > 600:
                 last_update = self.now()
                 self.maybe_update()
@@ -1212,6 +1245,40 @@ RUNNER_RE = re.compile(r"^(\S*/)?(ba)?sh\s+(\S*/)?run_gate\.sh(\s|$)")
 
 def _is_runner(command_line):
     return bool(RUNNER_RE.match(command_line))
+
+
+def _lock_owner(path):
+    """The command of the process holding a lock on this file, from the kernel's list of
+    locks. None if it cannot be told."""
+    try:
+        inode = str(os.stat(path).st_ino)
+        with open("/proc/locks", encoding="utf-8") as f:
+            held = [line.split() for line in f]
+    except OSError:
+        return None
+    real = os.path.realpath(path)
+    # A line reads: number, FLOCK, ADVISORY, WRITE, pid, device:inode, start, end. One with
+    # "->" is a process waiting for the lock, not holding it.
+    for fields in held:
+        if len(fields) < 6 or "->" in fields or fields[5].rsplit(":", 1)[-1] != inode:
+            continue
+        pid = fields[4]
+        try:
+            # The same inode number can belong to a file on another disk; the holder has this one open.
+            fds = os.listdir(f"/proc/{pid}/fd")
+            if not any(os.path.realpath(f"/proc/{pid}/fd/{fd}") == real for fd in fds):
+                continue
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                argv = [a for a in f.read().decode(errors="replace").split("\0") if a]
+        except OSError:
+            continue
+        # Started as `flock run.lock COMMAND`: the command is what the owner knows it by.
+        paths = [os.path.realpath(a) for a in argv]
+        if argv and os.path.basename(argv[0]) == "flock" and real in paths[1:]:
+            argv = argv[paths.index(real, 1) + 1:]
+        if argv:
+            return " ".join(argv)[:160]
+    return None
 
 
 def _run_gate_is_running():
