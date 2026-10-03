@@ -78,6 +78,8 @@ PAUSED_EXIT = 75
 # Harnesses that can carry on a saved conversation (run_gate.sh --fork).
 HARNESSES_THAT_FORK = {"pi"}
 MAX_PARTS = 6
+# How long to wait before trying again after a pause for memory with no answer (seconds).
+MEMORY_RETRY_WAIT = 300
 # Every section the dispatcher adds begins this way, so the owner's own text is
 # everything before the first one.
 SECTION = "\n---\n\n## "
@@ -520,6 +522,7 @@ class Dispatcher:
         for model in models:
             parts = []
             resume, fork = "", ""
+            retried_for_memory = False
             while True:
                 log = self.live_log(name, model)
                 state["running"] = {"model": model, "round": round_, "started": _stamp(), "part": len(parts) + 1,
@@ -563,9 +566,24 @@ class Dispatcher:
                 if exit_code != PAUSED_EXIT or not run_name:
                     break
                 if result["calls"] == 0:
-                    # Another part would start from the same place and stop the same way.
-                    result["message"] = (f"Visor stopped carrying this on: part {len(parts)} was paused before the "
-                                         f"model answered once.\n\n{result['message']}")
+                    # Paused before the model answered once. For want of memory, the machine may
+                    # simply have been busy: wait and try once more. For any other reason (a forked
+                    # conversation too long to re-read in time) another part would start from the
+                    # same place and stop the same way.
+                    memory = "short of memory" in result["report"]
+                    if memory and not retried_for_memory:
+                        retried_for_memory = True
+                        self.log(f"{name}: paused for memory before the model answered; trying once more "
+                                 f"in {MEMORY_RETRY_WAIT // 60} minutes")
+                        time.sleep(MEMORY_RETRY_WAIT)
+                        continue
+                    why = ("the machine was short of memory both times visor tried" if memory else
+                           "the model never answered, and a further part would stop the same way")
+                    result["message"] = (f"**Visor could not start this: {why}.** Nothing was done. "
+                                         + ("Something else was using the machine's memory; try again later by moving "
+                                            "the note back to `inbox/`." if memory else
+                                            "The conversation it carried on may be too long to re-read within a part.")
+                                         + f"\n\n{result['message']}")
                     break
                 if len(parts) >= MAX_PARTS:
                     left = ("The last part's branch holds the work so far." if round_ == "build" else

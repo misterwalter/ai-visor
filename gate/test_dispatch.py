@@ -49,7 +49,8 @@ FAKE_RUNNER = textwrap.dedent('''\
         exit_code = 75
     report = [f"# {run}", ""]
     if paused:
-        report += ["**PAUSED: it had run for 4h.** Not finished and not failed.", ""]
+        reason = os.environ.get("FAKE_PAUSE_REASON", "it had run for 4h")
+        report += [f"**PAUSED: {reason}.** Not finished and not failed.", ""]
     elif exit_code:
         report += [f"**AGENT FAILED (exit {exit_code}).** Anything below is what it left behind.", "Stopped as stuck: the same call 8 times.", ""]
     report += [f"- agent minutes: 7   agent exit: {exit_code}",
@@ -125,6 +126,7 @@ class DispatchTest(unittest.TestCase):
         os.environ.pop("FAKE_PAUSES", None)
         os.environ.pop("FAKE_SESSION", None)
         os.environ.pop("FAKE_CALLS_MADE", None)
+        os.environ.pop("FAKE_PAUSE_REASON", None)
         os.environ.pop("FAKE_STOPS_EARLY", None)
         self.state = os.path.join(root, "state")
         self.other_run = False
@@ -647,7 +649,30 @@ class DispatchTest(unittest.TestCase):
         self.note("inbox", "q.md", "Project: game\nModel: official\nAnalysis: why?\n")
         self.d.once()
         self.assertEqual(len(self.calls_made()), 1)
-        self.assertIn("part 1 was paused before the model answered once", self.read("your-turn", "q.md"))
+        self.assertIn("the model never answered, and a further part would stop the same way", self.read("your-turn", "q.md"))
+
+    def test_a_pause_for_memory_before_any_answer_is_tried_once_more(self):
+        # The first attempt found the machine short of memory; the retry gets through.
+        os.environ.update(FAKE_PAUSES="1", FAKE_CALLS_MADE="0",
+                          FAKE_PAUSE_REASON="the machine was short of memory: swapping at 99 MB/s")
+        dispatch.MEMORY_RETRY_WAIT = 0
+        self.note("inbox", "q.md", "Project: game\nModel: official\nAnalysis: why?\n")
+        self.d.once()
+        self.assertEqual(len(self.calls_made()), 2, "one retry")
+        note = self.read("your-turn", "q.md")
+        self.assertNotIn("could not start", note)
+        self.assertTrue(any("trying once more" in m for m in self.logged))
+
+    def test_short_of_memory_twice_is_said_plainly_with_what_to_do(self):
+        os.environ.update(FAKE_PAUSES="100", FAKE_CALLS_MADE="0",
+                          FAKE_PAUSE_REASON="the machine was short of memory: swapping at 99 MB/s")
+        dispatch.MEMORY_RETRY_WAIT = 0
+        self.note("inbox", "q.md", "Project: game\nModel: official\nAnalysis: why?\n")
+        self.d.once()
+        self.assertEqual(len(self.calls_made()), 2)
+        note = self.read("your-turn", "q.md")
+        self.assertIn("**Visor could not start this: the machine was short of memory both times visor tried.**", note)
+        self.assertIn("moving the note back to `inbox/`", note)
 
     def test_both_models_are_each_carried_on_separately(self):
         os.environ["FAKE_PAUSES"] = "1"
