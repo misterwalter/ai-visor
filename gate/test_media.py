@@ -53,7 +53,10 @@ FAKE_COMFY = textwrap.dedent('''\
     assert "--disable-all-custom-nodes" in args and "--disable-api-nodes" in args, "add-ons must be off"
     assert "--enable-manager" not in args, "the add-on installer must stay off"
     BUILT_IN = {"CheckpointLoaderSimple", "LoraLoader", "CLIPSetLastLayer", "ModelSamplingDiscrete",
-                "CLIPTextEncode", "EmptyLatentImage", "KSampler", "VAEDecode", "SaveImage"}
+                "CLIPTextEncode", "EmptyLatentImage", "KSampler", "VAEDecode", "SaveImage",
+                "UNETLoader", "ModelSamplingAuraFlow", "CLIPLoader", "T5TokenizerOptions", "VAELoader",
+                "CFGGuider", "KSamplerSelect", "BetaSamplingScheduler", "RandomNoise",
+                "EmptySD3LatentImage", "SamplerCustomAdvanced"}
     def png():
         raw = b"\\x00\\xff\\x00\\x00"
         chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
@@ -75,7 +78,8 @@ FAKE_COMFY = textwrap.dedent('''\
             odd = {n["class_type"] for n in graph.values()} - BUILT_IN
             if odd: return self.reply(400, {"error": f"not built in: {sorted(odd)}"})
             open(os.path.join(out, "..", "graph.json"), "w").write(json.dumps(graph))
-            count = next(n["inputs"]["batch_size"] for n in graph.values() if n["class_type"] == "EmptyLatentImage")
+            count = next(n["inputs"]["batch_size"] for n in graph.values()
+                         if n["class_type"] in ("EmptyLatentImage", "EmptySD3LatentImage"))
             images = []
             for i in range(count):
                 name = f"visor_{i + 1:05d}_.png"
@@ -198,6 +202,25 @@ class MediaTest(unittest.TestCase):
         noob = media.image_spec({"prompt": "a fox", "model": "noobai"})
         self.assertFalse(noob["fast"])
         self.assertEqual(media.comfy_graph(noob)["vpred"]["inputs"]["sampling"], "v_prediction")
+
+    def test_chroma_is_drawn_from_its_three_files_with_its_own_sampling(self):
+        comfy = os.path.join(self.settings.comfy_models)
+        for folder, name in (("diffusion_models", "Chroma1-HD.safetensors"),
+                             ("text_encoders", "t5xxl_fp8_e4m3fn.safetensors"), ("vae", "ae.safetensors")):
+            self.write(os.path.join(comfy, folder, name), "weights")
+        result = media.generate(self.settings, {"prompt": "a tiger's eye", "model": "chroma"}, self.job)
+        self.assertEqual(len(result["files"]), 1)
+        graph = json.load(open(os.path.join(self.job, "graph.json")))
+        self.assertEqual(graph["clip"]["inputs"]["type"], "chroma")
+        self.assertEqual(graph["sigmas"]["inputs"]["steps"], 26)
+        self.assertEqual(graph["latent"]["class_type"], "EmptySD3LatentImage")
+        self.assertNotIn("lora", graph)
+
+    def test_chroma_without_its_text_encoder_says_which_file_is_missing(self):
+        self.write(os.path.join(self.settings.comfy_models, "diffusion_models", "Chroma1-HD.safetensors"), "w")
+        with self.assertRaises(media.MediaError) as caught:
+            media.generate(self.settings, {"prompt": "x", "model": "chroma"}, self.job)
+        self.assertIn("t5xxl_fp8_e4m3fn.safetensors", str(caught.exception))
 
     def test_full_quality_drops_the_add_on(self):
         spec = media.image_spec({"prompt": "a fox", "quality": "full", "size": "832x1216", "model": "lustify"})

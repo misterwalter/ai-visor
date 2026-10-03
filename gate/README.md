@@ -235,6 +235,8 @@ models, and the job's scratch folder (`~/.local/state/visor/media/<job>/`).
   `--enable-manager`, and only `.safetensors` weights. It listens on a port inside
   the wall, and socat joins that to a socket in the job folder. SDXL models take
   the DMD2 add-on (8 steps rather than 30) unless the note asks for `Quality: full`.
+  Chroma (`Model: chroma`) uses its author's own ComfyUI workflow: the model, the
+  T5 text encoder and the Flux decoder as three files, 26 beta-scheduled steps.
 
 The dispatcher frees the model server's memory first, reads attachments only from
 inside `tasks/`, copies results into `tasks/media/`, and keeps a failed job's
