@@ -19,13 +19,15 @@
 #               was paused, instead of starting a new one (harnesses that can)
 # --live-log FILE  append a readable account of the run to FILE as it goes (livelog.py)
 # --thinking LEVEL  ask the model to think first: low, medium or high (pi only)
+# --web         the agent may use the internet, through the net door, which leads only
+#               into the VPN tunnel (doors/net-door.py). Without it there is no network
 # --tests CMD   how to run the project's tests, for a project that is not Godot.
 #               A Godot project (one with project.godot) uses gate/bin/gut-test.
 set -u
 
 REPO_SRC="$(realpath "${1:?repo required}")"; TASK="$(realpath "${2:?task file required}")"
 MODEL="${3:?model required}"; HARNESS="${4:?harness required: qwen or pi}"; shift 4
-ROUND="build"; NOTES=""; CONTINUE=""; FORK=""; TESTS=""; LIVE_LOG=""; FOLDER=no; THINKING=""
+ROUND="build"; NOTES=""; CONTINUE=""; FORK=""; TESTS=""; LIVE_LOG=""; FOLDER=no; THINKING=""; WEB=no
 while [ $# -gt 0 ]; do
   case "$1" in
     --plan-only) ROUND="plan" ;;
@@ -37,6 +39,7 @@ while [ $# -gt 0 ]; do
     --fork) FORK="$2"; shift ;;
     --live-log) LIVE_LOG="$2"; shift ;;
     --thinking) THINKING="$2"; shift ;;
+    --web) WEB=yes ;;
     --tests) TESTS="$2"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -59,6 +62,8 @@ OUT="/srv/code/gate-results/$RUN"
 WALL="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/gate-$RUN"
 CALLS="$OUT/model-calls.jsonl"
 MODEL_SERVER="127.0.0.1:11434"
+# The VPN tunnel's proxy on this machine (wireproxy.conf.example).
+VPN_PROXY="${VISOR_VPN_PROXY:-127.0.0.1:25344}"
 mkdir -p "$OUT/harness-log" /srv/code/work
 
 say() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
@@ -80,7 +85,7 @@ if [ -n "$LIVE_LOG" ]; then
   mkdir -p "$(dirname "$LIVE_LOG")" && touch "$LIVE_LOG" \
     || { say "cannot write the live log $LIVE_LOG"; exit 1; }
   live_note "
-## $(date '+%Y-%m-%d %H:%M') · $ROUND round · $MODEL${THINKING:+ · thinking $THINKING}
+## $(date '+%Y-%m-%d %H:%M') · $ROUND round · $MODEL${THINKING:+ · thinking $THINKING}$([ "$WEB" = yes ] && echo " · web")
 
 \`$RUN\`${FORK:+ · carries on the conversation of \`$FORK\`}${CONTINUE:+ · builds on \`$CONTINUE\`}
 "
@@ -110,6 +115,12 @@ fi
 for tool in bwrap socat python3 jq flock git "$HARNESS"; do
   command -v "$tool" > /dev/null || { say "missing program: $tool"; exit 1; }
 done
+# A run given the web gets a third door, which leads only into the VPN tunnel. The
+# tunnel must be there first: an agent told it has the web is not started without it.
+if [ "$WEB" = yes ] && ! timeout 5 bash -c "echo > /dev/tcp/${VPN_PROXY%:*}/${VPN_PROXY##*:}" 2>/dev/null; then
+  say "the VPN tunnel is not running at $VPN_PROXY, and this run was given the web -- not started (systemctl --user status visor-vpn)"
+  exit 1
+fi
 # The test door hands these paths to socat, which splits its arguments on spaces and commas.
 for path in "$WORK" "$WALL"; do
   [[ "$path" =~ ^[A-Za-z0-9_./-]+$ ]] \
@@ -200,6 +211,7 @@ if [ "$WRITES" = yes ]; then ACCESS="rw"; else ACCESS="ro"; fi
     echo "Run the tests with this command, from the repository's top folder: \`$TESTS\`"
     echo "Read the first failure before changing anything."
   fi
+  if [ "$WEB" = yes ]; then echo; cat "$HERE/system-prompt-web.md"; fi
   echo
   echo "# This project"
   if [ "$KIND" = folder ]; then echo "The folder is at $WORK."; else echo "The repository is at $WORK ($ENGINE)."; fi
@@ -230,7 +242,8 @@ else
   } > "$OUT/prompt.txt"
 fi
 
-# The two doors in the wall. Both are closed again as soon as the agent is done.
+# The doors in the wall: to the model, to Godot, and for a run given the web, to
+# the VPN tunnel. All are closed again as soon as the agent is done.
 mkdir -m 700 "$WALL" || { say "could not create $WALL"; exit 1; }
 [ "$KIND" = godot ] && echo "${ENGINE#godot }" > "$WALL/godot-version"   # read by inside/godot
 # The model's context window, as it is loaded (num_ctx in its Modelfile).
@@ -244,11 +257,18 @@ MODEL_DOOR=$!
 socat -t 3600 UNIX-LISTEN:"$WALL/godot.sock",fork EXEC:"$HERE/doors/godot-door $WORK $WALL/godot.lock" \
   2> "$OUT/godot-door.log" &
 GODOT_DOOR=$!
+DOOR_LOGS=("$OUT/model-door.log" "$OUT/godot-door.log")
+NET_DOOR=""
+if [ "$WEB" = yes ]; then
+  python3 "$HERE/doors/net-door.py" "$WALL/net.sock" "$VPN_PROXY" 2> "$OUT/net-door.log" &
+  NET_DOOR=$!
+  DOOR_LOGS+=("$OUT/net-door.log")
+fi
 WATCHERS=""; DOORS_OPEN=1
 close_doors() {
   [ "$DOORS_OPEN" = 1 ] || return 0
   DOORS_OPEN=0
-  kill $MODEL_DOOR $GODOT_DOOR $WATCHERS 2>/dev/null
+  kill $MODEL_DOOR $GODOT_DOOR $NET_DOOR $WATCHERS 2>/dev/null
   # A Godot the agent started through the test door must not outlive the run.
   if [ "$KIND" = godot ] && flatpak ps --columns=application 2>/dev/null | grep -q org.godotengine.Godot; then
     say "WARNING: Godot was still running after the agent; stopping it"
@@ -257,23 +277,31 @@ close_doors() {
   rm -rf "$WALL"
 }
 trap close_doors EXIT
+doors_open() {
+  [ -S "$WALL/model.sock" ] && [ -S "$WALL/godot.sock" ] && { [ "$WEB" = no ] || [ -S "$WALL/net.sock" ]; }
+}
 for _ in $(seq 1 50); do
-  [ -S "$WALL/model.sock" ] && [ -S "$WALL/godot.sock" ] && break
+  doors_open && break
   sleep 0.1
 done
-[ -S "$WALL/model.sock" ] && [ -S "$WALL/godot.sock" ] \
-  || { say "the doors did not open -- see $OUT/model-door.log and $OUT/godot-door.log"; exit 1; }
+doors_open || { say "the doors did not open -- see ${DOOR_LOGS[*]}"; exit 1; }
 
-# Nothing the agent must not see may be visible from inside, and both doors must
-# pass what they should and refuse the rest. Checked before every run.
+# Nothing the agent must not see may be visible from inside, and each door must
+# pass what it should and refuse the rest. Checked before every run.
 WALLED=("$HERE/wall.sh" "$WORK" "$WALL" "$OUT/harness-log" "$ACCESS")
-"${WALLED[@]}" check-wall "$ACCESS" "$WORK" "$HOME/.ssh" "$REPO_SRC" "$TASK" "$OUT/run.log" "$HERE/run_gate.sh" \
+"${WALLED[@]}" check-wall "$ACCESS" "$WEB" "$WORK" "$HOME/.ssh" "$REPO_SRC" "$TASK" "$OUT/run.log" "$HERE/run_gate.sh" \
   < /dev/null > "$OUT/wall-check.log" 2>&1 \
-  || { say "WALL CHECK FAILED -- the agent was not started"; cat "$OUT/wall-check.log"; exit 1; }
+  || { cat "$OUT/wall-check.log"
+       say "WALL CHECK FAILED -- the agent was not started: $(grep '^FAIL' "$OUT/wall-check.log" | cut -c7- | paste -sd';' -)"
+       exit 1; }
 say "wall checked: $(grep -c '^ok' "$OUT/wall-check.log") checks passed"
-# The check knocks on both doors with requests they must refuse. Those are not the agent's.
-refusals() { cat "$OUT/model-door.log" "$OUT/godot-door.log" | grep -c REFUSED; }
+# The check knocks on the doors, with requests they must refuse among them. Those are not the agent's.
+refusals() { cat "${DOOR_LOGS[@]}" | grep -c REFUSED; }
 REFUSED_BY_CHECK="$(refusals)"
+# Where the agent went on the web, from the net door's own record of what it passed.
+NET_CHECKED=0; [ "$WEB" = no ] || NET_CHECKED="$(wc -l < "$OUT/net-door.log")"
+web_log() { tail -n +"$(( NET_CHECKED + 1 ))" "$OUT/net-door.log"; }
+web_visits() { web_log | awk '$2 == "passed" {sub(/:[0-9]+$/, "", $4); print $4}'; }
 # The model's answers to the agent, as the model door recorded them.
 answered() { jq -c 'select(.status == 200)' "$CALLS"; }
 
@@ -461,7 +489,7 @@ fi
 TOO_LONG="$(grep -c 'TOO LONG' "$OUT/model-door.log")"
 [ "$TOO_LONG" = 0 ] || say "the model door turned away $TOO_LONG requests too long for the model's window"
 REFUSED=$(( $(refusals) - REFUSED_BY_CHECK ))
-[ "$REFUSED" = 0 ] || say "the doors refused $REFUSED requests from the agent -- see model-door.log and godot-door.log"
+[ "$REFUSED" = 0 ] || say "the doors refused $REFUSED requests from the agent -- see the door logs in $OUT"
 harness_final_message > "$OUT/final-message.md" 2> /dev/null
 [ -s "$OUT/final-message.md" ] || say "WARNING: the agent left no closing message"
 
@@ -553,6 +581,15 @@ fi
   [ "$TOO_LONG" = 0 ] || echo "- too long: $TOO_LONG requests exceeded the model's $WINDOW-token window and were turned away"
   echo "- wall: $(grep -c '^ok' "$OUT/wall-check.log") checks passed before the agent started;" \
        "the doors refused $REFUSED requests from the agent"
+  if [ "$WEB" = yes ]; then
+    VISITS="$(web_visits | wc -l)"; LOST="$(web_log | grep -c ' FAILED ')"
+    if [ "$VISITS" = 0 ]; then
+      echo "- web: given, and not used$([ "$LOST" = 0 ] || echo "; $LOST requests failed in the tunnel")"
+    else
+      echo "- web: $VISITS connections through the VPN to $(web_visits | sort -u | wc -l) hosts:" \
+           "$(web_visits | sort -u | head -20 | paste -sd' ' -)$([ "$LOST" = 0 ] || echo "; $LOST requests failed in the tunnel")"
+    fi
+  fi
   echo "- branch: visor/$RUN   workspace: $WORK"
   echo "- pushed: $PUSHED"
   [ -n "$PAUSED" ] && echo "- paused: yes"

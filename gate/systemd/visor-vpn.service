@@ -1,0 +1,12 @@
+[Unit]
+Description=Visor: the VPN tunnel, as a proxy on this machine only (wireproxy)
+
+[Service]
+# The tunnel changes nothing about this machine's own network: only what is
+# sent to its proxy goes through it, and the net door is all that is.
+ExecStart=/srv/code/tools/wireproxy/wireproxy -c %h/.config/visor/wireproxy.conf
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target

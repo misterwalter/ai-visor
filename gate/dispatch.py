@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -58,7 +59,7 @@ VOICE_LANGUAGES = {"a": "American English", "b": "British English", "e": "Spanis
 # Jobs for a fixed program rather than an agent (media.py). They need no project.
 MEDIA_ROUNDS = ("transcribe", "speak", "image")
 # The header lines a note may have, other than the rounds.
-HEADER_KEYS = ("project", "model", "thinking", "new project", "github", "tests",
+HEADER_KEYS = ("project", "model", "thinking", "web", "new project", "github", "tests",
                "voice", "speed", "language", "size", "count", "steps", "seed", "negative", "quality")
 HEADER_RE = re.compile(r"^\s*(" + "|".join(k.replace(" ", r"\s+") for k in HEADER_KEYS + ROUNDS + MEDIA_ROUNDS)
                        + r")\s*:\s*(.*)$", re.IGNORECASE)
@@ -85,6 +86,7 @@ REPLY_HEADING = "## Your reply"
 
 SAMPLE_JOB = """Project: {project}
 Model: both
+Web: No
 Plan:
 
 This is a template. Copy it into inbox/ as a new note, change the lines above,
@@ -104,6 +106,7 @@ The first lines of a note tell visor what to do. Only `Project:` is required.
 | `Write:` | For a folder project: visor writes what you ask and adds it beside your files as new drafts, `Chapter4b.md` after `Chapter4a.md`. It never changes or deletes a file of yours. | |
 | `Model: <model>` | Which model does the work: one from "What this server has" at the end, or `both` for the two coder builds in turn. | The project's own `model` setting, else `both`. |
 | `Thinking: yes` or `no`, or `low`, `medium`, `high` | Whether the model thinks before it answers, and how hard. Its thinking appears in the live log. Slower. Only for models that can think, such as `glimmer`. | No thinking. |
+| `Web: yes` or `no` | Whether the model may use the internet in this run, on an Analysis, Plan, Build or Write note. Everything it fetches goes through the VPN, and the reply says where it went. With the VPN down, the note comes back to you unrun. | No internet. |
 
 The question or request can go on the same line as `Analysis:`, `Plan:` or
 `Build:`, or below the header, or both.
@@ -179,6 +182,8 @@ def split_note(text):
 
 # What a note's Thinking: line may say, and the level the harness is asked for.
 THINKING = {"no": None, "off": None, "yes": "medium", "on": "medium", "low": "low", "medium": "medium", "high": "high"}
+# What a note's Web: line may say.
+WEB = {"no": False, "off": False, "yes": True, "on": True}
 
 
 def parse_header(owner_text):
@@ -285,6 +290,8 @@ class Dispatcher:
         # Live logs: what each run is doing, readable in the notes while it goes.
         self.logs = visor.get("logs", os.path.join(self.tasks, "logs"))
         self.live_log_every = visor.get("live_log_every", "60")
+        # The VPN tunnel's proxy on this machine: where a run given the web is led, and nowhere else.
+        self.vpn_proxy = visor.get("vpn_proxy", "127.0.0.1:25344")
         self.models = {"official": "coder-official", "abliterated": "coder-abliterated",
                        "glimmer": "glimmer-abliterated"}
         if parser.has_section("models"):
@@ -334,6 +341,15 @@ class Dispatcher:
             entries = json.load(f)["providers"]["ollama"]["models"]
         entry = next((e for e in entries if e["id"] == self.models.get(model)), None)
         return bool(entry and (entry.get("compat") or {}).get("supportsReasoningEffort"))
+
+    def vpn_up(self):
+        """Whether the tunnel's proxy is listening. No run is given the web without it."""
+        host, _, port = self.vpn_proxy.rpartition(":")
+        try:
+            with socket.create_connection((host, int(port)), timeout=5):
+                return True
+        except (OSError, ValueError):
+            return False
 
     def live_log(self, note_name, who):
         """One log per note and model: every part and every round of it, in order."""
@@ -435,6 +451,13 @@ class Dispatcher:
                     return None, [], None, (f"`Thinking: {header['thinking']}` asks for thinking, and "
                                             f"{', '.join(cannot)} cannot think. Use a model that can, such as "
                                             "glimmer, or leave the line out.")
+        if header["web"] is not None and header["web"].lower() not in WEB:
+            return None, [], None, f"`Web: {header['web']}` is not one visor knows: use yes or no."
+        if WEB[(header["web"] or "no").lower()] and not self.vpn_up():
+            return None, [], None, ("`Web: yes` asks for the internet, which visor reaches only through the VPN, and "
+                                    f"the VPN is not running on the server (nothing answers at {self.vpn_proxy}). "
+                                    "Nothing was started. Start it there with `systemctl --user start visor-vpn`, "
+                                    "or take the line out to run without the internet.")
         if round_ == "build" and not settings["tests"] and not _is_godot(settings["source"]):
             return None, [], None, (f"`{header['project']}` has no test command in visor's settings, and a build "
                                     "needs one. Ask for a plan or an analysis, or add `tests =` for it.")
@@ -472,6 +495,7 @@ class Dispatcher:
         with open(path, encoding="utf-8") as f:
             owner_text, rest = split_note(f.read())
         thinking = THINKING.get((parse_header(owner_text)["thinking"] or "no").lower())
+        web = WEB[(parse_header(owner_text)["web"] or "no").lower()]
         task_file = os.path.join(self.tasks_state, slug(name) + ".md")
         write_file(task_file, owner_text)
 
@@ -489,6 +513,8 @@ class Dispatcher:
                     flags += ["--folder"]
                 if thinking:
                     flags += ["--thinking", thinking]
+                if web:
+                    flags += ["--web"]
                 if fork:
                     # The task and the discussion are in the conversation it carries on.
                     flags += ["--fork", fork]
@@ -657,6 +683,9 @@ class Dispatcher:
         os.makedirs(job)
         started, failed = time.time(), None
         try:
+            if WEB.get((header["web"] or "no").lower(), True):
+                raise media.MediaError(f"`Web: {header['web']}` is for the rounds an agent does. Transcription, "
+                                       "speech and images run with no network: take the line out.")
             self._unload_models()
             section = getattr(self, f"_media_{kind}")(name, header, owner_text, job)
         except media.MediaError as error:
@@ -882,7 +911,8 @@ class Dispatcher:
         log_path = os.path.join(self.state_dir, "run.log")
         with open(log_path, "w", encoding="utf-8") as out:
             exit_code = subprocess.call(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                        env=dict(os.environ, VISOR_LIVE_LOG_EVERY=self.live_log_every))
+                                        env=dict(os.environ, VISOR_LIVE_LOG_EVERY=self.live_log_every,
+                                                 VISOR_VPN_PROXY=self.vpn_proxy))
         with open(log_path, encoding="utf-8", errors="replace") as f:
             log = f.read()
         match = re.search(r"\] run (\S+)", log)
@@ -891,11 +921,12 @@ class Dispatcher:
         return (match.group(1) if match else None), exit_code
 
     def _read_result(self, run_name):
-        result = {"report": "", "message": "", "pull_request": "none", "pushed": False, "summary": ""}
+        result = {"report": "", "message": "", "pull_request": "none", "pushed": False, "summary": "", "log": ""}
         if not run_name:
             return result
         out = os.path.join(self.results, run_name)
-        for key, filename in (("report", "report.md"), ("message", "final-message.md")):
+        # run.log is the runner's own account; its end says why a run with no report stopped.
+        for key, filename in (("report", "report.md"), ("message", "final-message.md"), ("log", "run.log")):
             try:
                 with open(os.path.join(out, filename), encoding="utf-8", errors="replace") as f:
                     result[key] = f.read().strip()
@@ -914,6 +945,10 @@ class Dispatcher:
             m = re.search(pattern, report)
             if m and not (label == "tests after" and m.group(1) == "n/a"):
                 facts.append(f"{label} {m.group(1)}")
+        # Where a run given the web went. From the report's own list, not the agent's message below it.
+        web = re.search(r"^- web: (.+)$", report.split("\n## ", 1)[0], re.MULTILINE)
+        if web:
+            facts.append(f"web: {web.group(1)}")
         result["summary"] = " · ".join(facts)
         return result
 
@@ -931,6 +966,11 @@ class Dispatcher:
         if log:
             facts.append(f"live log: {_link(log)}")
         lines += [" · ".join(facts), ""]
+        if not result["report"]:
+            # The runner stopped before the agent was started: its last line says why.
+            said = re.sub(r"^\[[\d:]+\] ", "", (result["log"].splitlines() or ["it left no log"])[-1])
+            lines += [f"> **THE RUN STOPPED BEFORE THE AGENT STARTED (exit {exit_code}):** {said}", ""]
+            return "\n".join(lines)
         failed = re.search(r"^\*\*(AGENT FAILED|PAUSED).*$", result["report"], re.MULTILINE)
         if failed:
             lines += [f"> {failed.group(0)}", ""]

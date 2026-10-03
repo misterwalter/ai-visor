@@ -6,7 +6,7 @@
 #   wall.sh <workspace> <wall dir> <log dir> <rw|ro> <command> [args...]
 #
 # <workspace>  the project clone the agent works in
-# <wall dir>   holds the two door sockets; seen inside as /run/gate
+# <wall dir>   holds the door sockets; seen inside as /run/gate
 # <log dir>    where the harness keeps its own records; writable inside
 # rw | ro      whether the workspace can be written (ro for a plan-only round)
 #
@@ -15,7 +15,8 @@
 #   writable    the workspace (its .git read-only), the log dir, an empty home, /tmp
 #   absent      everything else: the real home, other runs, the source clone, notes
 # The network is a private one with nothing on it. The command is started through
-# inside/start-agent, which connects the model's usual address to the model door.
+# inside/start-agent, which connects the model's usual address to the model door,
+# and a web proxy's address to the net door when the wall dir holds one.
 set -u
 
 WORK="$(realpath "${1:?workspace required}")"; WALL="$(realpath "${2:?wall dir required}")"

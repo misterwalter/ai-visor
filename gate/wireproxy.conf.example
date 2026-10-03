@@ -1,0 +1,12 @@
+# Settings for the VPN tunnel (wireproxy), which the net door leads into. Copy to
+# ~/.config/visor/wireproxy.conf and put your own path on the first line.
+#
+# The WireGuard file it names comes from your VPN provider and holds your key.
+# It stays on the server, readable by this account alone (chmod 600), and never
+# goes in this repository.
+WGConfig = /home/YOU/.config/visor/wg.conf
+
+# The proxy the net door connects to: on this machine only. Visor expects this
+# address unless vpn_proxy in visor.conf says otherwise.
+[Socks5]
+BindAddress = 127.0.0.1:25344

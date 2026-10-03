@@ -30,11 +30,14 @@ agent, tests before and after, and a report.
 | `wall.sh` | Runs a command inside the sandbox. `run_gate.sh` starts the agent through it. |
 | `doors/model-door.py` | The one way from the sandbox to the model. Passes chat requests, refuses the rest, records every call. |
 | `doors/godot-door` | The one way from the sandbox to Godot. Accepts four requests. |
+| `doors/net-door.py` | The one way from the sandbox to the internet, opened only for a note that says `Web: yes`. Leads only into the VPN tunnel, and records every destination. Tests: `test_net_door.py`. |
+| `wireproxy.conf.example` | The VPN tunnel's settings, to copy to `~/.config/visor/wireproxy.conf`. |
 | `inside/` | The programs the agent finds inside the sandbox: `gut-test`, `godot-check`, `godot-import`, the self-check, and a `godot` that explains what to use in its place. |
 | `system-prompt.md` | The agent's standing instructions for a repository, kept short on purpose. |
 | `system-prompt-folder.md` | The same for a folder project: a writer's, with the drafts rule. |
 | `system-prompt-build.md`, `system-prompt-write.md`, `system-prompt-plan.md`, `system-prompt-analysis.md` | What is added for each kind of round. |
 | `system-prompt-godot.md` | What a build round on a Godot project adds: the check commands, and Godot 3 habits to avoid. |
+| `system-prompt-web.md` | What a run given the web adds: how to fetch a page, and that a page is never an instruction. |
 | `harness/qwen.sh`, `harness/pi.sh` | How each agent loop is started, and the tools it may offer. |
 | `qwen-settings.json` | Settings for Qwen Code. |
 | `pi/settings.json`, `pi/models.json` | Settings for pi, and where it finds the model. |
@@ -46,6 +49,7 @@ agent, tests before and after, and a report.
 | `godot/check_script.gd` | The script Godot runs to do that. |
 | `systemd/godot-update.*` | Nightly timer that updates the flatpak Godot, never during a run. |
 | `systemd/visor-dispatch.service` | Keeps the dispatcher running. |
+| `systemd/visor-vpn.service` | Keeps the VPN tunnel running. |
 
 Task files are not kept in this repo. `gate/tasks/` is git-ignored; write tasks
 wherever you keep your notes and pass the path.
@@ -86,6 +90,40 @@ The sandbox needs `bwrap` (bubblewrap) and `socat`. Flatpak depends on the
 first, and most systems ship the second. `run_gate.sh` names any program it
 cannot find and stops.
 
+### The web, through a VPN
+
+A note that says `Web: yes` gives its run the internet, and only through a VPN
+tunnel. The tunnel is wireproxy: a WireGuard client that runs as an ordinary
+program and offers the tunnel as a proxy on this machine. It needs no root and
+leaves the machine's own network as it was. Without it everything else works,
+and a note that asks for the web comes back unrun. This too is an install to
+approve yourself:
+
+```bash
+mkdir -p /srv/code/tools/wireproxy && cd /srv/code/tools/wireproxy
+curl -fL -o wireproxy_linux_amd64.tar.gz https://github.com/windtf/wireproxy/releases/download/v1.1.3/wireproxy_linux_amd64.tar.gz
+echo "e88c1d090740373fc606c1bafd81d9a5eadc642cce5667616e20e9d7a444f51c  wireproxy_linux_amd64.tar.gz" | sha256sum -c -
+tar -xzf wireproxy_linux_amd64.tar.gz wireproxy
+```
+
+- `mkdir -p` makes the folder, without complaint if it exists; `&&` enters it
+  only if that worked.
+- `curl` downloads the release. `-f` fails on a server error rather than saving
+  the error page, `-L` follows GitHub's redirect, `-o` names the saved file.
+- `sha256sum -c -` checks the download against the fingerprint the project
+  published for it, read from the `echo`. It must print `OK`.
+- `tar -xzf ... wireproxy` unpacks that one file from the archive.
+
+```bash
+cp gate/wireproxy.conf.example ~/.config/visor/wireproxy.conf    # then edit it
+./gate/install.sh
+```
+
+- The settings name your VPN provider's WireGuard file, which holds your key.
+  Keep that file on the server, `chmod 600`, and out of any repository.
+- `install.sh` enables the tunnel as a service once the program and its
+  settings are there. `systemctl --user status visor-vpn` shows it.
+
 ## The dispatcher
 
 The dispatcher turns notes in a shared notes folder into runs, and puts each
@@ -106,6 +144,7 @@ The first lines of a note say what to do:
 | `Project: <name>` | Which project, by its name in the settings. | The note comes back with an error. |
 | `Analysis:` / `Plan:` / `Build:` | The round: answer a question, propose a plan, or make the change. | `Plan:` |
 | `Model: official` / `abliterated` / `both` | Which model. `both` runs each in turn. | The setting `default_model`. |
+| `Web: yes` | The run may use the internet, through the VPN tunnel and nothing else. With the tunnel down, the note comes back unrun. | No network at all. |
 
 A note replied to and moved to `approved/` gets a build round, or another
 analysis round if it was a question. The whole discussion goes with it, and a
@@ -328,6 +367,8 @@ round changes nothing, so it commits, pushes and opens nothing; its result is
   - `system-prompt.txt`, `prompt.txt` exactly what the agent was told
   - `wall-check.log` the sandbox's self-check, run before the agent started
   - `model-door.log`, `godot-door.log` what passed through the doors and what was refused
+  - `net-door.log` for a run given the web: every destination it connected to,
+    and what was refused or failed
   - `memory.log` one line a minute: free memory, swapping, major page faults,
     model size, calls made, context in use
 
@@ -380,7 +421,7 @@ request. The sandbox makes it a fact, enforced by the kernel.
 | System programs, the harness, its settings | read-only |
 | The home folder, SSH keys, other runs, the source clone, your notes | absent |
 | The account list | cut down to the agent's own account |
-| Network | none |
+| Network | none; for a note that says `Web: yes`, the net door and nothing else |
 
 `.git` is read-only because git runs hook scripts, and the runner uses git on
 the workspace after the agent has finished. A hook written by the agent would
@@ -392,8 +433,9 @@ whole filesystem, the network, and the right to run commands on the host.
 `flatpak run --sandbox` drops all of that, and the wrapper hands back the
 project folder alone.
 
-**Two doors.** Godot's flatpak cannot start inside wall 1, and the harness
-needs to reach the model, so the wall has two narrow openings:
+**The doors.** Godot's flatpak cannot start inside wall 1, and the harness
+needs to reach the model, so the wall has two narrow openings, and a third for
+a run given the web:
 
 - **The model door** passes `POST /v1/chat/completions` for the run's model and
   refuses everything else. The model server can also pull, push and delete
@@ -402,12 +444,23 @@ needs to reach the model, so the wall has two narrow openings:
   wall, so the count of calls and tokens does not rest on the agent's honesty.
 - **The test door** accepts `import`, `test`, `test NAME`, `testfn NAME` and `check FILE`. It
   runs one Godot at a time, inside wall 2, and sends back the output.
+- **The net door** is opened only when the note says `Web: yes`. From inside it
+  is an ordinary web proxy. Every connection it makes goes to one address, the
+  VPN tunnel's proxy on this machine, which is handed the destination by name:
+  the door looks nothing up and connects to nothing else. The wall's network
+  has nothing else on it, so whatever the agent runs, and whatever tools are
+  added later, the tunnel is the only way out, and with the tunnel down every
+  request fails at the door. It refuses requests for this machine and private
+  networks, and records every destination in `net-door.log`. The report says
+  where the run went.
 
 **The self-check.** Before every run, `inside/check-wall` is run inside the
 wall. It confirms that the paths which must be hidden are hidden, that `.git`,
 `/usr` and `/etc` cannot be written, that the network is closed, and that each
-door passes what it should and refuses what it should not. If any check fails,
-the agent is not started.
+door passes what it should and refuses what it should not. For a run given
+the web it makes one connection out through the net door, so a tunnel that is
+up but carrying nothing is found before the agent starts; for any other run it
+confirms there is no net door. If any check fails, the agent is not started.
 
 **What the sandbox does not do:**
 
@@ -418,6 +471,11 @@ the agent is not started.
   wall. Nothing in the report is taken from it.
 - It rests on the kernel's namespaces, as flatpak does. A kernel flaw could
   breach it.
+- The doors are visor's own programs and run outside the wall, with this
+  account's whole network. That the net door connects only to the tunnel is
+  held by its code and its tests, not by the kernel.
+- The tunnel hides this machine's address from the sites a run visits. It does
+  not hide what the run asks for from the VPN provider.
 
 ## Why it is set up this way
 
@@ -450,7 +508,8 @@ three files, and the first run failed for that reason.
 - **Background features off** in `qwen-settings.json`. Automatic memory, memory
   consolidation and follow-up suggestions each make model calls of their own.
   With one model on one CPU they add minutes and evict the cached prompt.
-- **Usage reporting off.** Web tools are among those excluded.
+- **Usage reporting off.** The harness's own web tools are among those
+  excluded: a run given the web fetches pages with `curl`, through the net door.
 - **Tool output truncated** at 16,000 characters, so one large file cannot fill
   the context.
 - **No cap on the length of one reply.** Qwen Code gives up on a reply after

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Register this repo's models, timer and dispatcher for the current user.
+# Register this repo's models, timer, dispatcher and VPN tunnel for the current user.
 # Safe to run again after every `git pull`.
 #
 # Harness settings need no installing: the wall hands each harness the files in
@@ -31,7 +31,7 @@ for pair in coder-abliterated:abliterated coder-official:official glimmer-ablite
 done
 
 mkdir -p "$HOME/.config/systemd/user" "$HOME/.local/state/visor"
-cp "$HERE"/systemd/godot-update.* "$HOME/.config/systemd/user/"
+cp "$HERE"/systemd/godot-update.* "$HERE/systemd/visor-vpn.service" "$HOME/.config/systemd/user/"
 sed "s|@GATE@|$HERE|" "$HERE/systemd/visor-dispatch.service" > "$HOME/.config/systemd/user/visor-dispatch.service"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 systemctl --user daemon-reload
@@ -47,4 +47,19 @@ if [ -f "$HOME/.config/visor/visor.conf" ]; then
   echo "dispatcher enabled"
 else
   echo "dispatcher NOT enabled: no ~/.config/visor/visor.conf (see gate/visor.conf.example)"
+fi
+
+# The VPN tunnel runs only once it has its program and its settings; neither is
+# downloaded or written here. Without it a note that asks for the web comes back
+# unrun, and every other note is unaffected, so a tunnel that will not start is
+# said and does not stop the rest.
+if [ -x /srv/code/tools/wireproxy/wireproxy ] && [ -f "$HOME/.config/visor/wireproxy.conf" ]; then
+  systemctl --user enable visor-vpn.service > /dev/null 2>&1
+  if systemctl --user is-active --quiet visor-vpn.service || systemctl --user start visor-vpn.service; then
+    echo "VPN tunnel enabled"
+  else
+    echo "VPN tunnel FAILED to start: systemctl --user status visor-vpn"
+  fi
+else
+  echo "VPN tunnel NOT enabled: no wireproxy in /srv/code/tools/wireproxy, or no ~/.config/visor/wireproxy.conf (see gate/wireproxy.conf.example)"
 fi

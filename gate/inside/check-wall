@@ -2,9 +2,12 @@
 # Prove the wall from the inside, before the agent is let in. Prints one line per
 # check and exits 1 if any failed.
 #
-#   check-wall <rw|ro> <workspace> <path that must be hidden>...
+#   check-wall <rw|ro> <yes|no> <workspace> <path that must be hidden>...
+#
+# yes | no   whether the run was given the web, and so a net door
 set -u
-ACCESS="${1:?rw or ro required}"; WORK="${2:?workspace required}"; shift 2
+ACCESS="${1:?rw or ro required}"; WEB="${2:?yes or no required: whether the run has the web}"
+WORK="${3:?workspace required}"; shift 3
 failed=0
 ok()   { echo "ok    $1"; }
 fail() { echo "FAIL  $1"; failed=1; }
@@ -20,6 +23,18 @@ connection = http.client.HTTPConnection("127.0.0.1", 11434, timeout=30)
 connection.request(method, path, body="{}" if method == "POST" else None,
                    headers={"Content-Type": "application/json"})
 print(connection.getresponse().status)
+EOF
+}
+
+# Status of one request to the net door, asked as a web proxy is asked, or "none"
+# if nothing answered.
+proxy_status() {
+  python3 - "$1" "$2" <<'EOF' 2>/dev/null || echo none
+import socket, sys
+method, target = sys.argv[1], sys.argv[2]
+with socket.create_connection(("127.0.0.1", 3128), timeout=90) as door:
+    door.sendall(f"{method} {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
+    print(door.recv(64).split()[1].decode())
 EOF
 }
 
@@ -40,6 +55,18 @@ accounts="$(wc -l < /etc/passwd)"
 if [ "$accounts" -le 3 ]; then ok "account list holds $accounts entries"; else fail "account list holds $accounts entries"; fi
 
 if timeout 5 bash -c 'echo > /dev/tcp/1.1.1.1/443' 2>/dev/null; then fail "the network is open"; else ok "the network is closed"; fi
+
+if [ "$WEB" = yes ]; then
+  # Connecting sends nothing. It shows that the tunnel carries a connection out.
+  status="$(proxy_status CONNECT 1.1.1.1:443)"
+  if [ "$status" = 200 ]; then ok "net door reaches the internet through the tunnel"; else fail "net door: no way out through the VPN tunnel (got $status, expected 200)"; fi
+  status="$(proxy_status CONNECT 127.0.0.1:11434)"
+  if [ "$status" = 403 ]; then ok "net door refuses this machine"; else fail "net door: a request for this machine got $status, expected 403"; fi
+elif [ -e /run/gate/net.sock ]; then
+  fail "there is a net door, and this run was not given the web"
+else
+  ok "no net door"
+fi
 
 # An empty chat request is one the model server rejects without loading a model.
 status="$(http_status POST /v1/chat/completions)"

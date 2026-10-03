@@ -29,6 +29,10 @@ github_owner = your-github-name
 # often, in seconds, it is brought up to date.
 # logs = /srv/notes/tasks/logs
 live_log_every = 60
+# The VPN tunnel's proxy on this machine (see wireproxy.conf.example). A note
+# with "Web: yes" gets the internet through it and through nothing else; while
+# it is down, such a note comes back unrun.
+# vpn_proxy = 127.0.0.1:25344
 
 # Transcription, speech and images (media.py). These are the defaults, under
 # tools; set any that differ. sandbox = no is for tests only.

@@ -1,18 +1,38 @@
 #!/usr/bin/env bash
 # First program inside the wall. Opens the inner end of the model door, so the
-# harness finds the model at its usual address, then becomes the given command.
+# harness finds the model at its usual address, and of the net door when the run
+# was given the web, then becomes the given command.
 # Usage: start-agent <command> [args...]
 set -u
 socat TCP-LISTEN:11434,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/run/gate/model.sock &
+# The ports to wait for, as the kernel's table writes them: in hexadecimal.
+ports="2CAA"
 
-# True once something listens on port 11434, which the kernel's table writes in
-# hexadecimal as 2CAA, with state 0A for "listening". Looking is quieter than
-# knocking: a test connection would show up in the door's log as a failed request.
-listening() { awk '$2 ~ /:2CAA$/ && $4 == "0A" {found = 1} END {exit !found}' /proc/net/tcp; }
+# The net door is there only in a run given the web. Programs find it as an
+# ordinary web proxy. One that ignores these settings finds no network at all:
+# the wall has none, and this is the only opening.
+if [ -S /run/gate/net.sock ]; then
+  socat TCP-LISTEN:3128,bind=127.0.0.1,reuseaddr,fork UNIX-CONNECT:/run/gate/net.sock &
+  ports="$ports 0C38"
+  export http_proxy=http://127.0.0.1:3128 https_proxy=http://127.0.0.1:3128
+  export HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy"
+  # The model is at this machine's own address, through its own door, never this one.
+  export no_proxy=127.0.0.1,localhost NO_PROXY=127.0.0.1,localhost
+fi
+
+# True once something listens on each port: 11434 is 2CAA and 3128 is 0C38, with
+# state 0A for "listening". Looking is quieter than knocking: a test connection
+# would show up in a door's log as a failed request.
+listening() {
+  local port
+  for port in $ports; do
+    awk -v port=":$port\$" '$2 ~ port && $4 == "0A" {found = 1} END {exit !found}' /proc/net/tcp || return 1
+  done
+}
 
 for _ in $(seq 1 50); do
   listening && exec "$@"
   sleep 0.1
 done
-echo "start-agent: the model door did not open" >&2
+echo "start-agent: the doors did not open" >&2
 exit 1

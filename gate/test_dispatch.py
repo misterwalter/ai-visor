@@ -34,6 +34,12 @@ FAKE_RUNNER = textwrap.dedent('''\
         f.write(json.dumps(args + ["NOTES=" + notes]) + "\\n")
     out = os.path.join(results, run)
     os.makedirs(out)
+    if os.environ.get("FAKE_STOPS_EARLY"):
+        # As the real one does when it stops before the agent: a log, and no report.
+        open(os.path.join(out, "run.log"), "w").write(
+            f"[12:00:00] run {run}  (round)\\n[12:00:01] {os.environ['FAKE_STOPS_EARLY']}\\n")
+        print(f"[12:00:00] run {run}  (round)")
+        sys.exit(1)
     build = "--analysis" not in args and "--plan-only" not in args and "--write" not in args
     exit_code = int(os.environ.get("FAKE_EXIT", "0"))
     paused = n < int(os.environ.get("FAKE_PAUSES", "0"))
@@ -50,6 +56,8 @@ FAKE_RUNNER = textwrap.dedent('''\
                f"- pushed: {'yes, as visor/' + run if build else 'nothing to push'}"]
     if paused:
         report += ["- paused: yes"]
+    if "--web" in args:
+        report += ["- web: 2 connections through the VPN to 1 hosts: example.org"]
     report += ["- base: abc123", ""]
     if build:
         report += ["## Checks", "", "- **numbers changed:** `x.gd:3`: 80 → 140", ""]
@@ -115,12 +123,15 @@ class DispatchTest(unittest.TestCase):
         os.environ.pop("FAKE_PAUSES", None)
         os.environ.pop("FAKE_SESSION", None)
         os.environ.pop("FAKE_CALLS_MADE", None)
+        os.environ.pop("FAKE_STOPS_EARLY", None)
         self.state = os.path.join(root, "state")
         self.other_run = False
         self.logged = []
         self.clock = time.time() + 1000  # every note has settled unless a test says otherwise
         self.d = dispatch.Dispatcher(self.config, self.state, now=lambda: self.clock,
                                      other_run_active=lambda: self.other_run, log=self.logged.append)
+        self.vpn = True  # the tunnel is up unless a test says otherwise
+        self.d.vpn_up = lambda: self.vpn
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -668,6 +679,70 @@ class DispatchTest(unittest.TestCase):
 
     # Mistakes in a note come back to the owner, loudly
 
+    # The web
+
+    def test_a_run_is_given_the_web_only_when_its_note_asks(self):
+        self.note("inbox", "a.md", "Project: game\nModel: official\nWeb: yes\nAnalysis: what changed in Godot 4.5?\n")
+        self.note("inbox", "b.md", "Project: game\nModel: official\nWeb: No\nAnalysis: and here?\n")
+        self.note("inbox", "c.md", "Project: game\nModel: official\nAnalysis: and here?\n")
+        for _ in range(3):
+            self.d.once()
+        asked, declined, silent = sorted(self.calls_made(), key=lambda call: call[1])
+        self.assertIn("--web", asked)
+        self.assertNotIn("--web", declined)
+        self.assertNotIn("--web", silent)
+        # Where it went is in the reply.
+        self.assertIn("web: 2 connections through the VPN to 1 hosts: example.org", self.read("your-turn", "a.md"))
+        self.assertNotIn("web:", self.read("your-turn", "c.md"))
+
+    def test_every_part_of_a_paused_round_keeps_the_web(self):
+        os.environ["FAKE_PAUSES"] = "1"
+        self.note("inbox", "task.md", "Project: game\nModel: official\nWeb: yes\nAnalysis: look it up\n")
+        self.d.once()
+        first, second = self.calls_made()
+        self.assertIn("--web", first)
+        self.assertIn("--web", second)
+
+    def test_with_the_vpn_down_a_note_that_asks_for_the_web_comes_back_unrun(self):
+        self.vpn = False
+        self.note("inbox", "a.md", "Project: game\nModel: official\nWeb: yes\nPlan:\n")
+        self.note("inbox", "b.md", "Project: game\nModel: official\nPlan:\n")
+        self.d.once()
+        self.d.once()
+        note = self.read("your-turn", "a.md")
+        self.assertIn("## Visor could not start", note)
+        self.assertIn("the VPN is not running on the server", note)
+        # A note that asks for no web is unaffected.
+        (call,) = self.calls_made()
+        self.assertTrue(call[1].endswith("b.md"))
+        self.assertNotIn("--web", call)
+
+    def test_the_vpn_counts_as_up_only_while_its_proxy_answers(self):
+        import socket
+        proxy = socket.socket()
+        proxy.bind(("127.0.0.1", 0))
+        proxy.listen()
+        self.d.vpn_proxy = f"127.0.0.1:{proxy.getsockname()[1]}"
+        self.assertTrue(dispatch.Dispatcher.vpn_up(self.d))
+        proxy.close()
+        self.assertFalse(dispatch.Dispatcher.vpn_up(self.d))
+
+    def test_a_web_line_visor_cannot_read_and_one_on_a_media_job_are_turned_back(self):
+        self.note("inbox", "a.md", "Project: game\nWeb: perhaps\nPlan:\n")
+        self.note("inbox", "b.md", "Web: yes\nImage: a lighthouse at dusk\n")
+        self.d.once()
+        self.d.once()
+        self.assertEqual(self.calls_made(), [])
+        self.assertIn("`Web: perhaps` is not one visor knows", self.read("your-turn", "a.md"))
+        self.assertIn("images run with no network", self.read("your-turn", "b.md"))
+
+    def test_a_run_that_stops_before_the_agent_starts_says_why_in_the_note(self):
+        os.environ["FAKE_STOPS_EARLY"] = "WALL CHECK FAILED -- the agent was not started: net door: no way out"
+        self.note("inbox", "task.md", "Project: game\nModel: official\nWeb: yes\nPlan:\n")
+        self.d.once()
+        self.assertIn("> **THE RUN STOPPED BEFORE THE AGENT STARTED (exit 1):** WALL CHECK FAILED -- the agent "
+                      "was not started: net door: no way out", self.read("your-turn", "task.md"))
+
     def test_a_note_without_a_project_comes_back_with_the_reason(self):
         self.note("inbox", "task.md", "Make the thing.\n")
         self.d.once()
@@ -762,6 +837,7 @@ class DispatchTest(unittest.TestCase):
     def test_the_sample_job_is_itself_a_valid_note_for_a_known_project(self):
         header = dispatch.parse_header(self.d.sample_job())
         self.assertEqual(header["model"], "both")
+        self.assertEqual(header["web"], "No")
         self.assertEqual(header["round"], "plan")
         self.assertEqual(header["project"], "game")
         self.assertIn("`game`, `notests`, `story`, `textgame`", self.d.sample_job())
