@@ -143,7 +143,7 @@ folder as current file".
 |---|---|
 | `Transcribe:` with a recording attached (`![[memo.m4a]]`) | Adds the transcript to the note. `Language: en` if the language is known. |
 | `Speak:` with text below, or a note embedded (`![[Chapter2a.md]]`) | Reads it aloud into an MP3. `Voice:` (default `af_heart`; `bf_emma`, `am_michael`, `bm_george` and others), `Speed:` (1.0). |
-| `Image: <prompt>`, more prompt below if wanted | Draws it. `Model:` is the image model: `realistic-vision` (default, fastest), `big-lust`, `pony`, or `chroma` (the best, and about an hour an image). `lustify` and `noobai` are known but not downloaded: Civitai gives them only to a logged-in account. `Size: 832x1216`, `Count: 2`, `Seed:`, `Negative:`, `Quality: full` for more steps, slower. |
+| `Image: <prompt>`, more prompt below if wanted | Draws it. `Model:` is the image model: `realistic-vision` (default, fastest), `big-lust`, `pony`, `aom3` (anime), `dreamshaper`, `sdxl-base`, or `chroma` (the best, and about an hour an image). `lustify` and `noobai` are known but not downloaded: Civitai gives them only to a logged-in account. `Size: 832x1216`, `Count: 2`, `Seed:`, `Negative:`, `Quality: full` for more steps, slower. |
 
 Each runs walled in with no network, and all of them take time on this
 machine: minutes for an image, about real time for a recording.

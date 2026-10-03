@@ -191,6 +191,15 @@ IMAGE_MODELS = {
                "negative": "low quality, ugly, unfinished, out of focus, deformed, disfigured, blurry, smudged, "
                            "restricted palette, flat colors, watermark, signature",
                "about": "Chroma1-HD (Flux class), photographic; the best here, and by far the slowest"},
+    # From the earlier ComfyUI install, each checked against its published SHA-256.
+    "sdxl-base": {"file": "sd_xl_base_1.0.safetensors", "kind": "sdxl", "fast": True, "cfg": 7.0,
+                  "about": "Stability's SDXL 1.0 base; general, weak at adult content"},
+    "aom3": {"file": "aom3.safetensors", "kind": "sd15", "steps": 25, "cfg": 6.0, "clip_skip": 2,
+             "sampler": "dpmpp_2m", "scheduler": "karras",
+             "about": "AbyssOrangeMix 3 (SD 1.5), anime, adult-capable"},
+    "dreamshaper": {"file": "DreamShaper_8_pruned.safetensors", "kind": "sd15", "steps": 25, "cfg": 7.0,
+                    "sampler": "dpmpp_2m", "scheduler": "karras",
+                    "about": "DreamShaper 8 (SD 1.5), general, painterly to photographic"},
     "realistic-vision": {"file": "realisticVisionV60B1_v51HyperVAE_418901.safetensors", "kind": "sd15",
                          "width": 512, "height": 768, "steps": 6, "cfg": 1.5,
                          "sampler": "dpmpp_sde", "scheduler": "karras",
@@ -369,7 +378,8 @@ def generate(settings, options, job, on_progress=None):
     paths = os.path.join(job, "model-paths.yaml")
     with open(paths, "w") as f:
         f.write(f"visor:\n  base_path: {settings.comfy_models}\n  checkpoints: checkpoints\n  loras: loras\n"
-                "  vae: vae\n  text_encoders: text_encoders\n  diffusion_models: diffusion_models\n")
+                "  vae: vae\n  text_encoders: text_encoders\n  diffusion_models: diffusion_models\n"
+                "  controlnet: controlnet\n  clip_vision: clip_vision\n")
     sock, port = os.path.join(job, "comfy.sock"), _free_port()
     # ComfyUI listens on a port inside the wall, where the network is its own and empty;
     # socat joins that port to a socket in the job folder, which visor can reach.

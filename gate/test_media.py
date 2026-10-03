@@ -222,6 +222,14 @@ class MediaTest(unittest.TestCase):
             media.generate(self.settings, {"prompt": "x", "model": "chroma"}, self.job)
         self.assertIn("t5xxl_fp8_e4m3fn.safetensors", str(caught.exception))
 
+    def test_the_older_models_get_their_own_settings(self):
+        aom3 = media.image_spec({"prompt": "a fox", "model": "aom3"})
+        self.assertEqual((aom3["width"], aom3["height"], aom3["steps"], aom3["clip_skip"]), (512, 768, 25, 2))
+        self.assertIsNone(aom3["lora"])
+        base = media.image_spec({"prompt": "a fox", "model": "sdxl-base"})
+        self.assertEqual((base["lora"], base["steps"]), (media.DMD2, 8))
+        self.assertEqual(media.image_spec({"prompt": "a fox", "model": "sdxl-base", "quality": "full"})["cfg"], 7.0)
+
     def test_full_quality_drops_the_add_on(self):
         spec = media.image_spec({"prompt": "a fox", "quality": "full", "size": "832x1216", "model": "lustify"})
         self.assertIsNone(spec["lora"])
