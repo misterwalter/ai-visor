@@ -320,6 +320,28 @@ class DispatchTest(unittest.TestCase):
         self.assertIn("![[read audio 1.mp3]]", note)
         self.assertTrue(os.path.exists(os.path.join(self.tasks, "media", "read audio 1.mp3")))
 
+    def test_a_note_embedded_as_obsidian_writes_it_without_md_is_found_and_read(self):
+        story = os.path.join(self.tasks, "projects", "Story")
+        os.makedirs(story)
+        with open(os.path.join(story, "Chapter 1 - The Boat.md"), "w") as f:
+            f.write("The boat comes in.\n")
+        self.note("inbox", "read.md", "Project: story\nSpeak:\n\nChapter 1: The Boat\n![[Chapter 1 - The Boat]]\n")
+        seen = {}
+        def fake(settings, text, job, voice, speed, language):
+            seen.update(text=text)
+            return {"files": [self.made(job, "speech.mp3")], "seconds": 30}
+        with mock.patch.object(dispatch.media, "speak", fake):
+            self.d.once()
+        self.assertEqual(seen, {"text": "The boat comes in."})
+        self.assertIn("`Chapter 1 - The Boat.md` read by", self.read("your-turn", "read.md"))
+
+    def test_an_embed_that_cannot_be_found_is_named_and_nothing_is_read(self):
+        self.note("inbox", "read.md", "Speak:\n\nChapter 1: The Boat\n![[Chapter 1 - The Bote]]\n")
+        with mock.patch.object(dispatch.media, "speak", side_effect=AssertionError("must not run")):
+            self.d.once()
+        note = self.read("your-turn", "read.md")
+        self.assertIn("the note embeds `Chapter 1 - The Bote`, and no file of that name is anywhere in `tasks/`", note)
+
     def test_images_are_drawn_from_the_prompt_and_embedded(self):
         self.note("inbox", "pic.md", "Image: a lighthouse at dusk\nModel: pony\nCount: 2\n\nrain, wide shot\n")
         seen = {}

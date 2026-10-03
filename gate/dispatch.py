@@ -82,6 +82,8 @@ MAX_PARTS = 6
 # everything before the first one.
 SECTION = "\n---\n\n## "
 SECTION_RE = re.compile(r"^---\n\n## ", re.MULTILINE)
+# The name in [[name]], [[name|shown]] or [[name#heading]]; an embed has ! before it.
+WIKILINK = r"\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]"
 REPLY_HEADING = "## Your reply"
 
 SAMPLE_JOB = """Project: {project}
@@ -154,7 +156,7 @@ folder as current file".
 | Note says | What visor does |
 |---|---|
 | `Transcribe:` with a recording attached (`![[memo.m4a]]`) | Adds the transcript to the note. `Language: en` if the language is known. |
-| `Speak:` with text below, or a note embedded (`![[Chapter2a.md]]`) | Reads it aloud into an MP3. `Voice:` from the list at the end (default `af_heart`), `Speed:` (1.0). |
+| `Speak:` with text below, or a note embedded (`![[Chapter2a]]`) | Reads it aloud into an MP3. `Voice:` from the list at the end (default `af_heart`), `Speed:` (1.0). |
 | `Image: <prompt>`, more prompt below if wanted | Draws it. `Model:` is the image model, from the list at the end (default `realistic-vision`). `Size: 832x1216`, `Count: 2`, `Seed:`, `Negative:`, `Quality: full` for more steps, slower. |
 
 Each runs walled in with no network, and all of them take time on this
@@ -722,6 +724,13 @@ class Dispatcher:
         return "\n".join(parts)
 
     def _media_speak(self, name, header, owner_text, job):
+        # An embed that cannot be found is text the owner meant to be read. Reading the
+        # rest without it would hand back a recording that looks whole and is not.
+        missing = [n.strip() for n in re.findall("!" + WIKILINK, owner_text) if not self._find(n.strip())]
+        if missing:
+            raise media.MediaError("the note embeds " + ", ".join(f"`{n}`" for n in missing) + ", and no file of "
+                                   "that name is anywhere in `tasks/`. Nothing was read. Check the name, and "
+                                   "that the file is inside `tasks/`.")
         notes = [p for p in self._attachments(owner_text) if p.lower().endswith(".md")]
         if notes:
             texts = []
@@ -753,25 +762,28 @@ class Dispatcher:
                     f"took {round((time.time() - took) / 60)} minutes")
         return f"## Images, {_stamp()}\n\n{settings}\n\n" + "\n".join(f"![[{s}]]" for s in saved) + "\n"
 
-    def _attachments(self, owner_text):
-        """Files the note embeds or links, found inside the tasks folder and nowhere else."""
-        names = re.findall(r"!?\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]", owner_text)
-        names += [urllib.parse.unquote(n) for n in re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", owner_text)]
+    def _find(self, wanted):
+        """The file a note names, inside the tasks folder and nowhere else; None if there is
+        none. A note may be named without its .md, which is how Obsidian writes an embed."""
         root = os.path.realpath(self.tasks)
-        found = []
-        for wanted in names:
-            wanted = wanted.strip()
-            hit = None
+        for spelling in (wanted, wanted + ".md"):
             for folder, dirs, files in os.walk(root):
                 dirs[:] = sorted(d for d in dirs if not d.startswith("."))
                 for candidate in files:
                     full = os.path.join(folder, candidate)
-                    if candidate == os.path.basename(wanted) and full.endswith(wanted):
-                        hit = full
-                        break
-                if hit:
-                    break
-            if hit and os.path.realpath(hit).startswith(root + os.sep) and hit not in found:
+                    if (candidate == os.path.basename(spelling) and full.endswith(spelling)
+                            and os.path.realpath(full).startswith(root + os.sep)):
+                        return full
+        return None
+
+    def _attachments(self, owner_text):
+        """Files the note embeds or links, found inside the tasks folder and nowhere else."""
+        names = re.findall("!?" + WIKILINK, owner_text)
+        names += [urllib.parse.unquote(n) for n in re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", owner_text)]
+        found = []
+        for wanted in names:
+            hit = self._find(wanted.strip())
+            if hit and hit not in found:
                 found.append(hit)
         return found
 
