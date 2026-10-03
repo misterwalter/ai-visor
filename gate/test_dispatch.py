@@ -921,6 +921,18 @@ class DispatchTest(unittest.TestCase):
         mode = os.stat(os.path.join(self.tasks, "your-turn", "task.md")).st_mode
         self.assertTrue(mode & stat.S_IWGRP)
 
+    def test_the_media_folder_is_made_so_the_owners_group_can_sort_and_delete_in_it(self):
+        self.note("inbox", "read.md", "Speak: Hello there.\n")
+        fake = lambda settings, text, job, voice, speed, language: {"files": [self.made(job, "speech.mp3")], "seconds": 1}
+        old = os.umask(0o022)  # as the service runs
+        try:
+            with mock.patch.object(dispatch.media, "speak", fake):
+                self.d.once()
+        finally:
+            os.umask(old)
+        self.assertTrue(os.stat(os.path.join(self.tasks, "media")).st_mode & stat.S_IWGRP)
+        self.assertTrue(os.stat(os.path.join(self.tasks, "media", "read audio 1.mp3")).st_mode & stat.S_IWGRP)
+
     def test_status_lists_what_waits_and_what_ran(self):
         self.note("inbox", "a.md", "Project: game\nModel: official\n")
         self.d.once()

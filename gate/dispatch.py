@@ -805,7 +805,10 @@ class Dispatcher:
 
     def _keep(self, name, kind, files):
         """Copy what a job made into the media folder under names the note can embed."""
-        os.makedirs(self.media_folder, exist_ok=True)
+        if not os.path.isdir(self.media_folder):
+            os.makedirs(self.media_folder)
+            # The owner sorts and deletes what is here from another account, as with a project's folder.
+            os.chmod(self.media_folder, 0o2775)
         stem, saved, n = os.path.splitext(name)[0], [], 1
         for source in files:
             ext = os.path.splitext(source)[1].lower()
